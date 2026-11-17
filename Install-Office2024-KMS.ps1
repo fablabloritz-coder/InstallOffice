@@ -2444,8 +2444,21 @@ $script:BgDoWorkHandler = {
     bg_Log "================================================" "STEP"
 
     $sync.ActiveStep = -1
-    $sync.HasError   = ($sync.StepState -contains "error")
-    $sync.FinalMsg   = if ($sync.HasError) { "Deploiement termine avec des erreurs.`nConsultez le journal." } else { "Microsoft Office 2024 deploye avec succes !" }
+    # StepState est une hashtable : '-contains' testerait les CLES, pas les valeurs.
+    # Sans ce test sur les valeurs, un echec KMS finissait sur un message de succes.
+    $stepValues = if ($sync.StepState -is [System.Collections.IDictionary]) { @($sync.StepState.Values) } else { @($sync.StepState) }
+    $sync.HasError = ($stepValues -contains "error")
+    $sync.FinalMsg = if (-not $sync.HasError) {
+        "Microsoft Office 2024 deploye avec succes !"
+    } elseif ($sync.StepState[4] -eq "error") {
+        if ($sync.StepState[3] -eq "done") {
+            "Office 2024 est installe, mais l'activation KMS a echoue.`nConsultez le journal, puis relancez 'Activer seulement' une fois le serveur KMS joignable."
+        } else {
+            "Activation KMS echouee.`nConsultez le journal pour la cause."
+        }
+    } else {
+        "Deploiement termine avec des erreurs.`nConsultez le journal."
+    }
     $sync.StatusText = if ($sync.HasError) { "Termine avec erreurs - voir journal." } else { "Succes !" }
     $sync.Done       = $true
     } catch {
