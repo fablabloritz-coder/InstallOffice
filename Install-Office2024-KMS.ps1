@@ -2123,7 +2123,7 @@ $script:BgDoWorkHandler = {
                 $cfg.DepotCopy  = -not (bg_TestDepotLocal $depot)
                 $cfg.SourcePath = if ($cfg.DepotCopy) { [string]$cfg.LocalDataPath } else { $depot }
                 if ($cfg.UseCustomXML) {
-                    bg_Log "XML personnalise : verifiez que son attribut SourcePath pointe vers $($cfg.SourcePath)." "WARN"
+                    bg_Log "XML personnalise : SourcePath sera impose/verifie avant l'installation ($($cfg.SourcePath))." "INFO"
                 }
 
                 if ($cfg.DepotCopy) {
@@ -2355,6 +2355,20 @@ $script:BgDoWorkHandler = {
         }
 
         try {
+            # Sans SourcePath, /configure retombe sur le CDN : l'installation hors ligne
+            # (mode depot) echouerait. On impose la source reellement disponible.
+            $installSource = [string]$cfg.SourcePath
+            if ([string]::IsNullOrWhiteSpace($installSource)) {
+                $installSource = if ($cfg.DepotEnabled) { [string]$cfg.DepotPath } else { [string]$cfg.LocalDataPath }
+            }
+            $instInfo = bg_EnsureSourcePath -XmlPath ([string]$cfg.ActualXMLPath) -SourcePath $installSource -WorkDir ([string]$cfg.LocalDataPath)
+            if ($instInfo.Injected) {
+                $cfg.ActualXMLPath = $instInfo.Path
+                bg_Log "XML sans SourcePath : copie avec SourcePath=$installSource utilisee pour l'installation (ODT ne retombera pas sur le CDN)." "WARN"
+            } elseif ($cfg.UseCustomXML) {
+                bg_Log "XML personnalise : SourcePath present - installation depuis la source indiquee." "OK"
+            }
+
             $setupDir2 = Split-Path $cfg.SetupExePath -Parent
             $proc = Start-Process -FilePath $cfg.SetupExePath -ArgumentList "/configure `"$($cfg.ActualXMLPath)`"" -Wait -PassThru -WindowStyle Hidden -WorkingDirectory $setupDir2
             $installCode = $proc.ExitCode
