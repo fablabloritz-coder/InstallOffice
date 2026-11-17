@@ -274,6 +274,93 @@ try {
     $local = Join-Path $Work "succes"
     $r = Invoke-Deploy $Worker (New-Cfg (New-SyncHash) $fakeExe $local -Depot $depot) $argsFile
     Check "depot valide : bilan de succes" ((-not $r.Sync.HasError) -and ($r.Sync.FinalMsg -like "*succes*")) $r.Sync.FinalMsg
+
+    Section "8. Proxy applique puis restaure (machine simulee)"
+    # Les trois fonctions sont extraites telles quelles ; seul leur acces systeme
+    # (bg_ProxySink) est remplace : aucune ecriture sur le poste.
+    $script:ProxyLogs = New-Object System.Collections.Generic.List[string]
+    function bg_Log { param([string]$M,[string]$L = "INFO") $script:ProxyLogs.Add("[" + $L + "] " + $M) }
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "bg_ProxySink")
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "bg_ApplyProxy")
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "bg_RestoreProxy")
+
+    $envInitial = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+    $envInitial["HTTP_PROXY"] = "http://herite:8080" ; $envInitial["HTTPS_PROXY"] = ""
+    $envInitial["http_proxy"] = "herite-min" ; $envInitial["https_proxy"] = ""
+    $machine = @{ WinHttpDirect = $true ; WinHttpExists = $true ; WinHttpValue = [byte[]](7,7,7)
+                  WinHttpServer = ""
+                  WinInet = @{ ProxyEnable = 0 ; ProxyServer = "" ; ProxyOverride = "" }
+                  Env     = $envInitial }
+    function Copy-Etat { param($m)
+        $envCopie = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+        foreach ($n in @("HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy")) { $envCopie[$n] = $m.Env[$n] }
+        @{ WinHttpDirect = $m.WinHttpDirect ; WinHttpExists = $m.WinHttpExists ; WinHttpValue = $m.WinHttpValue
+           WinInet = @{ ProxyEnable = $m.WinInet.ProxyEnable ; ProxyServer = $m.WinInet.ProxyServer ; ProxyOverride = $m.WinInet.ProxyOverride }
+           Env = $envCopie } }
+    $appels = New-Object System.Collections.Generic.List[string]
+    $faux = @{
+        Read = { Copy-Etat $machine }
+        Apply = { param($srv,$byp)
+                  $appels.Add("winhttp-set " + $srv + " bypass=" + $byp)
+                  $machine.WinHttpServer = $srv
+                  @{ Confirmed = $true ; Detail = "Proxy Server(s) : " + $srv ; Error = "" } }
+        RestoreWinHttp = { param($st)
+                  $appels.Add("winhttp-restore direct=" + $st.WinHttpDirect + " exists=" + $st.WinHttpExists + " valeur=" + (@($st.WinHttpValue) -join ","))
+                  $machine.WinHttpServer = "" }
+        WriteWinInet = { param($v)
+                  $txt = "wininet"
+                  foreach ($k in @($v.Keys | Sort-Object)) { $txt += " " + $k + "=" + $v[$k] }
+                  $appels.Add($txt)
+                  foreach ($k in @($v.Keys)) { $machine.WinInet[$k] = $v[$k] }
+                  $true }
+        WriteEnv = { param($v)
+                  $txt = "env"
+                  foreach ($k in @($v.Keys | Sort-Object)) { $txt += " " + $k + "=" + $v[$k] }
+                  $appels.Add($txt)
+                  foreach ($k in @($v.Keys)) { $machine.Env[$k] = $v[$k] } }
+    }
+
+    # etat reel du poste, releve avant tout
+    $envReel = @{}
+    foreach ($n in @("HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy")) { $envReel[$n] = [System.Environment]::GetEnvironmentVariable($n, "Process") }
+    $inetKeyReel = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings"
+    function Get-InetReel {
+        $v = @{}
+        foreach ($p in @("ProxyEnable","ProxyServer","ProxyOverride")) { $v[$p] = $null ; try { $v[$p] = Get-ItemPropertyValue -Path $inetKeyReel -Name $p -ErrorAction Stop } catch {} }
+        $v }
+    $regAvant = Get-InetReel
+    $netshAvant = ((& netsh winhttp show proxy 2>&1) -join " ").Trim()
+    $avant = Copy-Etat $machine
+
+    $cfgP = New-Cfg (New-SyncHash) $fakeExe (Join-Path $Work "proxy") -Proxy $true
+    $cfgP.ProxySink = $faux
+    $etat = bg_ApplyProxy $cfgP -ProxyHost "10.0.0.1" -ProxyPort "3128" -BypassList "<local>"
+    $t = ($script:ProxyLogs -join " | ")
+
+    Check "apply : WinHTTP machine (netsh set proxy)" ($appels[0] -eq "winhttp-set 10.0.0.1:3128 bypass=<local>") $appels[0]
+    Check "apply : WinINet session (ProxyEnable=1, serveur, exceptions)" (($appels[1] -match 'ProxyEnable=1') -and ($appels[1] -match 'ProxyServer=10\.0\.0\.1:3128') -and ($appels[1] -match 'ProxyOverride=<local>')) $appels[1]
+    Check "apply : 4 variables d'environnement" (($appels[2] -match 'HTTP_PROXY=http://10\.0\.0\.1:3128') -and ($appels[2] -match 'HTTPS_PROXY=http://10\.0\.0\.1:3128') -and ($appels[2] -match 'http_proxy=http://10\.0\.0\.1:3128') -and ($appels[2] -match 'https_proxy=http://10\.0\.0\.1:3128')) $appels[2]
+    Check "apply : journaux WinHTTP + WinINet" (($t -match 'Proxy WinHTTP \(machine\) applique : 10\.0\.0\.1:3128') -and ($t -match 'Proxy WinINet \(session\) applique')) $t
+    Check "apply : les 3 couches sont effectivement modifiees" (($machine.WinHttpServer -eq "10.0.0.1:3128") -and ($machine.WinInet.ProxyEnable -eq 1) -and ($machine.WinInet.ProxyServer -eq "10.0.0.1:3128") -and ($machine.WinInet.ProxyOverride -eq "<local>") -and ($machine.Env.HTTP_PROXY -eq "http://10.0.0.1:3128") -and ($machine.Env.https_proxy -eq "http://10.0.0.1:3128")) ("winhttp=" + $machine.WinHttpServer + " inet=" + $machine.WinInet.ProxyEnable + " env=" + $machine.Env.HTTP_PROXY)
+
+    bg_RestoreProxy $cfgP -State $etat
+    $rEnv = @($appels | Where-Object { $_ -like "env *" }) | Select-Object -Last 1
+    $rInet = @($appels | Where-Object { $_ -like "wininet*" }) | Select-Object -Last 1
+    $rWh = @($appels | Where-Object { $_ -like "winhttp-restore*" }) | Select-Object -Last 1
+
+    Check "restore : variables d'environnement d'origine" (($rEnv -match 'HTTP_PROXY=http://herite:8080') -and ($rEnv -match 'HTTPS_PROXY=( |$)') -and ($rEnv -match 'https_proxy=( |$)') -and ($rEnv -match 'http_proxy=herite-min')) $rEnv
+    Check "restore : WinINet d'origine (ProxyEnable=0)" (($rInet -match 'ProxyEnable=0') -and ($rInet -match 'ProxyServer=( |$)') -and ($rInet -match 'ProxyOverride=( |$)')) $rInet
+    Check "restore : WinHTTP remis en direct" (($rWh -match 'direct=True') -and ($rWh -match 'exists=True') -and ($rWh -match 'valeur=7,7,7')) $rWh
+    Check "restore : etat simule identique a l'etat initial" ((Copy-Etat $machine | ConvertTo-Json -Compress -Depth 5) -eq ($avant | ConvertTo-Json -Compress -Depth 5)) (Copy-Etat $machine | ConvertTo-Json -Compress -Depth 5)
+    Check "restore : journal de restauration" ((($script:ProxyLogs -join " | ") -match "Configuration proxy d'origine restauree")) ($script:ProxyLogs -join " | ")
+    Check "restore : aucun appel netsh reel" (@($appels | Where-Object { $_ -match 'netsh' }).Count -eq 0) ($appels -join " // ")
+
+    $regApres = Get-InetReel
+    $envApres = @{}
+    foreach ($n in @("HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy")) { $envApres[$n] = [System.Environment]::GetEnvironmentVariable($n, "Process") }
+    $netshApres = ((& netsh winhttp show proxy 2>&1) -join " ").Trim()
+    $intact = (($regApres.ProxyEnable -eq $regAvant.ProxyEnable) -and ($regApres.ProxyServer -eq $regAvant.ProxyServer) -and ($regApres.ProxyOverride -eq $regAvant.ProxyOverride) -and ($envApres.HTTP_PROXY -eq $envReel.HTTP_PROXY) -and ($envApres.https_proxy -eq $envReel.https_proxy) -and ($netshApres -eq $netshAvant))
+    Check "poste reel intact (HKCU, environnement, netsh)" $intact ("regle=" + $regApres.ProxyServer + " env=" + $envApres.HTTP_PROXY + " netsh=" + $netshApres)
 }
 catch {
     Write-Host ("ERREUR DU HARNAIS : " + $_.Exception.Message) -ForegroundColor Red

@@ -11,7 +11,7 @@ d'un réseau pédagogique.
 | `Install-Office2024-KMS.ps1` | Source de l'interface (v8.1) |
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (35 cas) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (47 cas) |
 | `setup.exe` | Office Deployment Tool — **non versionné**, à récupérer (voir ci-dessous) |
 
 ## Prérequis
@@ -81,6 +81,13 @@ Rejoue les cas clés sans rien installer : `SourcePath` imposé au téléchargem
 l'installation, destination des sources et verdict d'espace disque, codes de sortie ODT
 (32, 30066, 17002, 17029), échecs KMS (0xC004F074, 0x80070005, 0xC004F038, réponse
 inconnue, `ospp.vbs` absent), dépôt invalide, proxy injoignable et bilan final.
+
+Le proxy est aussi vérifié dans l'autre sens : le script applique les trois couches
+(WinHTTP machine, WinINet session, quatre variables d'environnement) **puis** les restaure
+à l'identique. Ces contrôles passent par `bg_ProxySink`, le point d'accès système unique des
+fonctions proxy : le script de contrôle le remplace par une machine simulée, si bien que
+le poste n'est jamais modifié (vérifié en comparant HKCU, l'environnement et `netsh`
+avant/après).
 
 Comment : un faux `setup.exe` est compilé dans `%TEMP%` (il enregistre ses arguments et
 renvoie le code voulu) et un `ospp.vbs` factice remplace celui d'Office ; aucun

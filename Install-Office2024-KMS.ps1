@@ -1853,85 +1853,97 @@ $script:BgDoWorkHandler = {
         return @{ Level = "OK" ; Msg = "Espace disque OK a cet emplacement : $FreeGB Go libres sur ${Root} (environ $NeedGB Go necessaires)." }
     }
 
-    # --- Etat proxy systeme (sauvegarde) ---
-    function bg_GetProxyState {
-        $st = @{ WinHttpExists = $false ; WinHttpValue = $null ; WinHttpDirect = $true ; WinInet = @{} ; Env = @{} }
+    # --- Acces systeme du proxy (un seul point, remplace par les controles automatises) ---
+    #     Defaut : netsh (WinHTTP machine), registre HKCU (WinINet session), environnement.
+    function bg_ProxySink {
+        param($Cfg)
+        if ($Cfg -and $Cfg.ProxySink) { return $Cfg.ProxySink }
         $connKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\Connections"
         $inetKey = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings"
-        try {
-            $st.WinHttpValue = Get-ItemPropertyValue -Path $connKey -Name "WinHttpSettings" -ErrorAction Stop
-            $st.WinHttpExists = $true
-        } catch { $st.WinHttpExists = $false }
-        try {
-            $txt = ((& netsh winhttp show proxy 2>&1) -join " ")
-            $st.WinHttpDirect = ($txt -match '(?i)Direct access|No proxy server|acc.s direct|aucun serveur proxy')
-        } catch { $st.WinHttpDirect = -not $st.WinHttpExists }
-        $ini = @{}
-        foreach ($p in @("ProxyEnable","ProxyServer","ProxyOverride")) {
-            $ini[$p] = $null
-            try { $ini[$p] = Get-ItemPropertyValue -Path $inetKey -Name $p -ErrorAction Stop } catch {}
+        return @{
+            Read = {
+                $whValue = $null ; $whExists = $false
+                try { $whValue = Get-ItemPropertyValue -Path $connKey -Name "WinHttpSettings" -ErrorAction Stop ; $whExists = $true } catch {}
+                $whDirect = -not $whExists
+                if ($whExists) {
+                    try { $whDirect = (((& netsh winhttp show proxy 2>&1) -join " ") -match '(?i)Direct access|No proxy server|acc.s direct|aucun serveur proxy') } catch {}
+                }
+                $ini = @{}
+                foreach ($p in @("ProxyEnable","ProxyServer","ProxyOverride")) {
+                    $ini[$p] = $null
+                    try { $ini[$p] = Get-ItemPropertyValue -Path $inetKey -Name $p -ErrorAction Stop } catch {}
+                }
+                # dictionnaire sensible a la casse : HTTP_PROXY et http_proxy sont deux variables
+                $envSt = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+                foreach ($n in @("HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy")) { $envSt[$n] = [System.Environment]::GetEnvironmentVariable($n, "Process") }
+                @{ WinHttpExists = $whExists ; WinHttpValue = $whValue ; WinHttpDirect = $whDirect ; WinInet = $ini ; Env = $envSt }
+            }
+            Apply = {
+                param($server,$bypass)
+                try {
+                    & netsh winhttp set proxy "$server" "$bypass" 2>&1 | Out-Null
+                    $after = ((& netsh winhttp show proxy 2>&1) -join " ").Trim()
+                    @{ Confirmed = ($after -match [regex]::Escape(($server -split ":")[0])) ; Detail = $after ; Error = "" }
+                } catch { @{ Confirmed = $false ; Detail = "" ; Error = $_.Exception.Message } }
+            }
+            RestoreWinHttp = {
+                param($State)
+                if ($State.WinHttpDirect -or -not $State.WinHttpExists) { & netsh winhttp reset proxy 2>&1 | Out-Null }
+                else { Set-ItemProperty -Path $connKey -Name "WinHttpSettings" -Value $State.WinHttpValue -Type Binary -Force }
+            }
+            WriteWinInet = {
+                param($Values)
+                $ok = $true
+                foreach ($p in @("ProxyEnable","ProxyServer","ProxyOverride")) {
+                    $t = if ($p -eq "ProxyEnable") { "DWord" } else { "String" }
+                    try {
+                        if ($null -eq $Values[$p]) { Remove-ItemProperty -Path $inetKey -Name $p -ErrorAction SilentlyContinue }
+                        else { New-ItemProperty -Path $inetKey -Name $p -Value $Values[$p] -PropertyType $t -Force | Out-Null }
+                    } catch { $ok = $false }
+                }
+                $ok
+            }
+            WriteEnv = {
+                param($Values)
+                foreach ($n in @("HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy")) {
+                    try { [System.Environment]::SetEnvironmentVariable($n, $Values[$n], "Process") } catch {}
+                }
+            }
         }
-        $st.WinInet = $ini
-        $envSt = @{}
-        foreach ($n in @("HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy")) { $envSt[$n] = [System.Environment]::GetEnvironmentVariable($n, "Process") }
-        $st.Env = $envSt
-        return $st
-    }
-
-    function bg_SetRegValue {
-        param([string]$Path,[string]$Name,$Value,[string]$Type = "String")
-        try {
-            if ($null -eq $Value) { Remove-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue }
-            else { New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType $Type -Force | Out-Null }
-            return $true
-        } catch { return $false }
     }
 
     # --- Application du proxy : WinHTTP machine + WinINet session + environnement ---
     function bg_ApplyProxy {
-        param([string]$ProxyHost,[string]$ProxyPort,[string]$BypassList)
+        param($Cfg, [string]$ProxyHost, [string]$ProxyPort, [string]$BypassList)
+        $sink = bg_ProxySink $Cfg
         $server = "${ProxyHost}:${ProxyPort}"
         if ([string]::IsNullOrWhiteSpace($BypassList)) { $BypassList = "<local>" }
-        $st = bg_GetProxyState
+        $st = & $sink.Read
         $st.Server = $server
 
-        try {
-            & netsh winhttp set proxy "$server" "$BypassList" 2>&1 | Out-Null
-            $after = ((& netsh winhttp show proxy 2>&1) -join " ").Trim()
-            if ($after -match [regex]::Escape($ProxyHost)) { bg_Log "Proxy WinHTTP (machine) applique : $server  |  exceptions : $BypassList" "OK" }
-            else { bg_Log "netsh winhttp n'a pas confirme le proxy : $after" "WARN" }
-        } catch { bg_Log "Echec netsh winhttp set proxy : $($_.Exception.Message)" "WARN" }
+        $res = & $sink.Apply $server $BypassList
+        if ($res.Error) { bg_Log "Echec netsh winhttp set proxy : $($res.Error)" "WARN" }
+        elseif ($res.Confirmed) { bg_Log "Proxy WinHTTP (machine) applique : $server  |  exceptions : $BypassList" "OK" }
+        else { bg_Log "netsh winhttp n'a pas confirme le proxy : $($res.Detail)" "WARN" }
 
-        $inetKey = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings"
-        if (bg_SetRegValue $inetKey "ProxyEnable" 1 "DWord") { bg_Log "Proxy WinINet (session) applique." "OK" }
+        if (& $sink.WriteWinInet @{ ProxyEnable = 1 ; ProxyServer = $server ; ProxyOverride = $BypassList }) { bg_Log "Proxy WinINet (session) applique." "OK" }
         else { bg_Log "Impossible d'ecrire le proxy de session (HKCU)." "WARN" }
-        [void](bg_SetRegValue $inetKey "ProxyServer" $server "String")
-        [void](bg_SetRegValue $inetKey "ProxyOverride" $BypassList "String")
 
-        foreach ($n in @("HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy")) {
-            [System.Environment]::SetEnvironmentVariable($n, "http://$server", "Process")
-        }
+        $envNew = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+        foreach ($n in @("HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy")) { $envNew[$n] = "http://$server" }
+        & $sink.WriteEnv $envNew
         return $st
     }
 
     # --- Restauration de la configuration proxy d'origine ---
     function bg_RestoreProxy {
-        param($State)
+        param($Cfg, $State)
         if ($null -eq $State) { return }
-        foreach ($n in @("HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy")) {
-            try { [System.Environment]::SetEnvironmentVariable($n, $State.Env[$n], "Process") } catch {}
-        }
-        $inetKey = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings"
-        foreach ($p in @("ProxyEnable","ProxyServer","ProxyOverride")) {
-            $t = if ($p -eq "ProxyEnable") { "DWord" } else { "String" }
-            [void](bg_SetRegValue $inetKey $p $State.WinInet[$p] $t)
-        }
+        $sink = bg_ProxySink $Cfg
+        & $sink.WriteEnv $State.Env
+        [void](& $sink.WriteWinInet $State.WinInet)
         try {
-            if ($State.WinHttpDirect -or -not $State.WinHttpExists) { & netsh winhttp reset proxy 2>&1 | Out-Null }
-            else {
-                Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\Connections" `
-                    -Name "WinHttpSettings" -Value $State.WinHttpValue -Type Binary -Force
-            }
+            & $sink.RestoreWinHttp $State
             bg_Log "Configuration proxy d'origine restauree." "OK"
         } catch { bg_Log "Restauration proxy partielle : $($_.Exception.Message)" "WARN" }
     }
@@ -2183,7 +2195,7 @@ $script:BgDoWorkHandler = {
             bg_Log "Connexion aux serveurs Microsoft - patience, 10 a 20 minutes." "INFO"
             bg_Log "Vous pouvez minimiser cette fenetre - une notification vous alertera." "INFO"
             # La sauvegarde/restauration des variables d'environnement est faite par
-            # bg_GetProxyState / bg_RestoreProxy, comme celle de WinHTTP et WinINet.
+            # bg_ApplyProxy / bg_RestoreProxy, comme celle de WinHTTP et WinINet.
             $proxyState = $null
             try {
                 if ($cfg.ProxyEnabled) {
@@ -2214,7 +2226,7 @@ $script:BgDoWorkHandler = {
                     }
 
                     # 2) Appliquer le proxy a WINDOWS (WinHTTP machine + WinINet session), puis restaurer
-                    $proxyState = bg_ApplyProxy -ProxyHost $proxyHost -ProxyPort $proxyPort -BypassList $proxyBypass
+                    $proxyState = bg_ApplyProxy $cfg -ProxyHost $proxyHost -ProxyPort $proxyPort -BypassList $proxyBypass
                     bg_Log "Proxy systeme applique : WinHTTP (machine) + WinINet (session). Les variables HTTP_PROXY seules ne sont pas lues par Office." "INFO"
                 } else {
                     bg_Log "Aucun proxy : utilisation de la configuration systeme existante." "INFO"
@@ -2365,7 +2377,7 @@ $script:BgDoWorkHandler = {
                 bg_Popup "Erreur telechargement" "$($_.Exception.Message)$odtLogDetail`n`nSolution :`n$sol" "Error"
                 bg_Abort "Deploiement interrompu." ; return
             } finally {
-                bg_RestoreProxy -State $proxyState
+                bg_RestoreProxy $cfg -State $proxyState
             }
         }
     } else { bg_Step 2 "skipped" ; bg_Log "Mode activation seule." }
