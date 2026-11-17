@@ -7,5 +7,9 @@ _layout.txt
 # Outil Office Deployment Tool (binaire Microsoft, ~7 Mo) : a telecharger, pas a versionner
 setup.exe
 
+# Sources Office (~3 Go) ecrites par ODT : quand le XML n'a pas de SourcePath,
+# il telecharge dans le repertoire courant, donc parfois ici.
+Office/
+
 # Configuration locale du poste (chemin setup.exe, KMS, depot)
 config.json

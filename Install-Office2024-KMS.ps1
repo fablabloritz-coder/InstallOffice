@@ -1789,6 +1789,43 @@ $script:BgDoWorkHandler = {
         } catch { return $false }
     }
 
+    # --- Impose SourcePath dans le XML avant tout telechargement ---
+    #     Sans cet attribut, ODT ecrit les sources (~3 Go) dans le repertoire courant
+    #     du processus, donc potentiellement dans le dossier de l'outil.
+    function bg_EnsureSourcePath {
+        param([string]$XmlPath, [string]$SourcePath, [string]$WorkDir)
+        if ([string]::IsNullOrWhiteSpace($XmlPath)) { throw "XML de deploiement introuvable (chemin vide)." }
+        if (-not (Test-Path -LiteralPath $XmlPath)) { throw "XML de deploiement introuvable : $XmlPath" }
+        if ([string]::IsNullOrWhiteSpace($SourcePath)) { throw "Destination des sources inconnue : impossible d'imposer SourcePath." }
+
+        $doc = New-Object System.Xml.XmlDocument
+        try { $doc.Load($XmlPath) } catch { throw "XML illisible ($XmlPath) : $($_.Exception.Message)" }
+
+        $adds = @($doc.SelectNodes("//*[local-name()='Add']"))
+        if ($adds.Count -eq 0) { throw "XML invalide : aucun element <Add> dans $XmlPath." }
+
+        $missing = 0
+        foreach ($a in $adds) {
+            if ($null -eq $a.Attributes.GetNamedItem("SourcePath")) {
+                $att = $doc.CreateAttribute("SourcePath")
+                $att.Value = $SourcePath
+                [void]$a.Attributes.Append($att)
+                $missing++
+            }
+        }
+        if ($missing -eq 0) { return @{ Path = $XmlPath ; Injected = $false } }
+
+        # On ne modifie jamais le fichier fourni : copie dediee au telechargement.
+        if (-not (Test-Path -LiteralPath $WorkDir)) { New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null }
+        $out = Join-Path $WorkDir "OfficeConfig2024.download.xml"
+        $settings = New-Object System.Xml.XmlWriterSettings
+        $settings.Encoding = New-Object System.Text.UTF8Encoding($false)
+        $settings.Indent = $true
+        $writer = [System.Xml.XmlWriter]::Create($out, $settings)
+        try { $doc.Save($writer) } finally { $writer.Close() }
+        return @{ Path = $out ; Injected = $true }
+    }
+
     # --- Etat proxy systeme (sauvegarde) ---
     function bg_GetProxyState {
         $st = @{ WinHttpExists = $false ; WinHttpValue = $null ; WinHttpDirect = $true ; WinInet = @{} ; Env = @{} }
@@ -2169,6 +2206,17 @@ $script:BgDoWorkHandler = {
                 $setupDir      = Split-Path $cfg.SetupExePath -Parent
                 $downloadStart = Get-Date
                 $officeDir     = Join-Path $cfg.LocalDataPath "Office"
+
+                # Sans attribut SourcePath, ODT ecrit les sources dans le repertoire courant
+                # (plusieurs Go dans le dossier de l'outil) : on impose la destination.
+                $srcRoot = if (-not [string]::IsNullOrWhiteSpace([string]$cfg.SourcePath)) { [string]$cfg.SourcePath } else { [string]$cfg.LocalDataPath }
+                $spInfo  = bg_EnsureSourcePath -XmlPath ([string]$cfg.ActualXMLPath) -SourcePath $srcRoot -WorkDir ([string]$cfg.LocalDataPath)
+                if ($spInfo.Injected) {
+                    $cfg.ActualXMLPath = $spInfo.Path
+                    bg_Log "XML sans SourcePath : copie avec SourcePath=$srcRoot utilisee ($(Split-Path $spInfo.Path -Leaf)). Aucune ecriture dans le repertoire courant." "WARN"
+                } else {
+                    bg_Log "XML : SourcePath present - telechargement confine a la destination indiquee." "OK"
+                }
 
                 # Lancer setup.exe sans -Wait pour pouvoir surveiller la progression
                 $proc = Start-Process -FilePath $cfg.SetupExePath `
