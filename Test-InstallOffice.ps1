@@ -142,6 +142,36 @@ try {
     Check "aucun motif obsolete" ($trouves.Count -eq 0) ($trouves -join ", ")
     Write-Host ("         " + $lines.Count + " lignes, " + $src.Length + " octets")
 
+    # L'EXE distribue embarque le script : son empreinte doit suivre le fichier .ps1.
+    $exePath = Join-Path $PSScriptRoot ([System.IO.Path]::GetFileNameWithoutExtension($MainScript) + ".exe")
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $hScript = [System.BitConverter]::ToString($sha.ComputeHash([System.IO.File]::ReadAllBytes($MainScript))).Replace("-", "")
+    $recompiler = "RECOMPILER : Invoke-PS2EXE -InputFile Install-Office2024-KMS.ps1 ... (README, section Compilation de l'EXE)"
+    if (-not (Test-Path -LiteralPath $exePath)) {
+        Check "EXE distribue present" $false ((Split-Path $exePath -Leaf) + " absent - " + $recompiler)
+    } else {
+        $embarque = $null
+        try {
+            $asm = [System.Reflection.Assembly]::Load([System.IO.File]::ReadAllBytes($exePath))
+            $nom = @($asm.GetManifestResourceNames() | Where-Object { $_ -like "*.ps1" }) | Select-Object -First 1
+            if ($nom) {
+                $flux = $asm.GetManifestResourceStream($nom)
+                $mem = New-Object System.IO.MemoryStream
+                $flux.CopyTo($mem)
+                $embarque = $mem.ToArray()
+            }
+        } catch { }
+        if ($null -eq $embarque) {
+            Check "EXE : script embarque lisible" $false ("aucune ressource .ps1 dans le binaire - " + $recompiler)
+        } else {
+            $hExe = [System.BitConverter]::ToString($sha.ComputeHash($embarque)).Replace("-", "")
+            $okExe = ($hExe -eq $hScript)
+            $detail = if ($okExe) { "sha256=" + $hScript.Substring(0, 12) + " (" + $embarque.Length + " octets embarques)" }
+                      else { "L'EXE ne correspond plus au script (" + $hScript.Substring(0, 12) + " vs " + $hExe.Substring(0, 12) + ") - " + $recompiler }
+            Check "EXE a jour : empreinte du script embarque" $okExe $detail
+        }
+    }
+
     # fixtures communes
     $fakeExe  = Join-Path $Work "fake_setup.exe"
     $argsFile = Join-Path $Work "args.txt"

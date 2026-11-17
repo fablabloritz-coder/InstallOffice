@@ -11,7 +11,7 @@ d'un réseau pédagogique.
 | `Install-Office2024-KMS.ps1` | Source de l'interface (v8.1) |
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (53 cas) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (54 cas) |
 | `setup.exe` | Office Deployment Tool — **non versionné**, à récupérer (voir ci-dessous) |
 
 ## Prérequis
@@ -77,7 +77,11 @@ Invoke-PS2EXE -InputFile "Install-Office2024-KMS.ps1" `
 powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps1
 ```
 
-Rejoue les cas clés sans rien installer : `SourcePath` imposé au téléchargement et à
+Vérifie d'abord que l'EXE distribué correspond au script : l'empreinte SHA-256 du script
+embarqué dans le binaire doit être celle du `.ps1`, sinon le contrôle s'arrête avec un
+message **RECOMPILER** (section « Compilation de l'EXE »).
+
+Rejoue ensuite les cas clés sans rien installer : `SourcePath` imposé au téléchargement et à
 l'installation, destination des sources et verdict d'espace disque, codes de sortie ODT
 (32, 30066, 17002, 17029), échecs KMS (0xC004F074, 0x80070005, 0xC004F038, réponse
 inconnue, `ospp.vbs` absent), dépôt invalide, proxy injoignable et bilan final.
