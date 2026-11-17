@@ -1806,32 +1806,39 @@ $script:BgDoWorkHandler = {
 
         $missing = 0
         foreach ($a in $adds) {
-            if ($null -eq $a.Attributes.GetNamedItem("SourcePath")) {
+            if ([string]::IsNullOrWhiteSpace([string]$a.GetAttribute("SourcePath"))) {
                 $att = $doc.CreateAttribute("SourcePath")
                 $att.Value = $SourcePath
                 [void]$a.Attributes.Append($att)
                 $missing++
             }
         }
-        if ($missing -eq 0) {
-            # SourcePath deja present : on remonte celui du XML, c'est la vraie destination.
-            $existant = ""
-            foreach ($a in $adds) {
-                $v = [string]$a.GetAttribute("SourcePath")
-                if (-not [string]::IsNullOrWhiteSpace($v)) { $existant = $v ; break }
-            }
-            return @{ Path = $XmlPath ; Injected = $false ; Source = $existant }
-        }
+        # SourcePath deja present : on remonte celui du XML, c'est la vraie destination.
+        if ($missing -eq 0) { return @{ Path = $XmlPath ; Injected = $false ; Source = [string]$adds[0].GetAttribute("SourcePath") } }
 
-        # On ne modifie jamais le fichier fourni : copie dediee au telechargement.
+        # On ne modifie jamais le fichier fourni : copie dediee (telechargement comme installation).
         if (-not (Test-Path -LiteralPath $WorkDir)) { New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null }
-        $out = Join-Path $WorkDir "OfficeConfig2024.download.xml"
+        $out = Join-Path $WorkDir "OfficeConfig2024.sourcepath.xml"
         $settings = New-Object System.Xml.XmlWriterSettings
         $settings.Encoding = New-Object System.Text.UTF8Encoding($false)
         $settings.Indent = $true
         $writer = [System.Xml.XmlWriter]::Create($out, $settings)
         try { $doc.Save($writer) } finally { $writer.Close() }
         return @{ Path = $out ; Injected = $true ; Source = $SourcePath }
+    }
+
+    # --- Prepare le XML pour ODT : destination des sources verifiee ou imposee ---
+    function bg_PrepareXmlSource {
+        param($Cfg, [string]$Etape)
+        $target = if (-not [string]::IsNullOrWhiteSpace([string]$Cfg.SourcePath)) { [string]$Cfg.SourcePath }
+                  elseif ($Cfg.DepotEnabled -and -not [string]::IsNullOrWhiteSpace([string]$Cfg.DepotPath)) { [string]$Cfg.DepotPath }
+                  else { [string]$Cfg.LocalDataPath }
+        $info = bg_EnsureSourcePath -XmlPath ([string]$Cfg.ActualXMLPath) -SourcePath $target -WorkDir ([string]$Cfg.LocalDataPath)
+        if ($info.Injected) {
+            $Cfg.ActualXMLPath = $info.Path
+            bg_Log ("XML sans SourcePath : $($info.Source) impose via une copie ($(Split-Path $info.Path -Leaf)) pour $Etape.") "WARN"
+        }
+        return $info
     }
 
     # --- Etat proxy systeme (sauvegarde) ---
@@ -2213,24 +2220,11 @@ $script:BgDoWorkHandler = {
 
                 $setupDir      = Split-Path $cfg.SetupExePath -Parent
                 $downloadStart = Get-Date
-                $officeDir     = Join-Path $cfg.LocalDataPath "Office"
 
-                # Sans attribut SourcePath, ODT ecrit les sources dans le repertoire courant
-                # (plusieurs Go dans le dossier de l'outil) : on impose la destination.
-                $srcFallback = if (-not [string]::IsNullOrWhiteSpace([string]$cfg.SourcePath)) { [string]$cfg.SourcePath } else { [string]$cfg.LocalDataPath }
-                $spInfo  = bg_EnsureSourcePath -XmlPath ([string]$cfg.ActualXMLPath) -SourcePath $srcFallback -WorkDir ([string]$cfg.LocalDataPath)
-                # Destination finale = ce que le XML demande reellement (impose ou deja present).
-                $srcRoot = if (-not [string]::IsNullOrWhiteSpace([string]$spInfo.Source)) { [string]$spInfo.Source } else { $srcFallback }
-                if ($spInfo.Injected) {
-                    $cfg.ActualXMLPath = $spInfo.Path
-                    bg_Log "XML sans SourcePath : copie avec SourcePath=$srcRoot utilisee ($(Split-Path $spInfo.Path -Leaf)). Aucune ecriture dans le repertoire courant." "WARN"
-                } else {
-                    bg_Log "XML : SourcePath present - telechargement confine a la destination indiquee." "OK"
-                }
-
-                # La destination reelle peut differer du dossier de travail (XML fourni avec
-                # son propre SourcePath) : la surveillance doit suivre ce dossier-la.
-                $officeDir = Join-Path $srcRoot "Office"
+                # Sans SourcePath, ODT ecrit les sources dans le repertoire courant : la source
+                # reelle (imposee ou deja presente dans le XML) sert de destination et de suivi.
+                $srcInfo   = bg_PrepareXmlSource $cfg "le telechargement"
+                $officeDir = Join-Path $srcInfo.Source "Office"
                 bg_Log "Destination des sources : $officeDir" "INFO"
 
                 # Espace disque a CET emplacement (pas seulement sur C:)
@@ -2239,7 +2233,7 @@ $script:BgDoWorkHandler = {
                 $srcFreeGB   = $null
                 $srcRootPath = $null
                 try {
-                    $srcRootPath = [System.IO.Path]::GetPathRoot($srcRoot)
+                    $srcRootPath = [System.IO.Path]::GetPathRoot($srcInfo.Source)
                     if (-not [string]::IsNullOrWhiteSpace($srcRootPath)) {
                         $srcDrive  = New-Object System.IO.DriveInfo($srcRootPath)
                         $srcFreeGB = [math]::Round($srcDrive.AvailableFreeSpace / 1GB, 1)
@@ -2392,17 +2386,7 @@ $script:BgDoWorkHandler = {
         try {
             # Sans SourcePath, /configure retombe sur le CDN : l'installation hors ligne
             # (mode depot) echouerait. On impose la source reellement disponible.
-            $installSource = [string]$cfg.SourcePath
-            if ([string]::IsNullOrWhiteSpace($installSource)) {
-                $installSource = if ($cfg.DepotEnabled) { [string]$cfg.DepotPath } else { [string]$cfg.LocalDataPath }
-            }
-            $instInfo = bg_EnsureSourcePath -XmlPath ([string]$cfg.ActualXMLPath) -SourcePath $installSource -WorkDir ([string]$cfg.LocalDataPath)
-            if ($instInfo.Injected) {
-                $cfg.ActualXMLPath = $instInfo.Path
-                bg_Log "XML sans SourcePath : copie avec SourcePath=$installSource utilisee pour l'installation (ODT ne retombera pas sur le CDN)." "WARN"
-            } elseif ($cfg.UseCustomXML) {
-                bg_Log "XML personnalise : SourcePath present - installation depuis la source indiquee." "OK"
-            }
+            $null = bg_PrepareXmlSource $cfg "l'installation"
 
             $setupDir2 = Split-Path $cfg.SetupExePath -Parent
             $proc = Start-Process -FilePath $cfg.SetupExePath -ArgumentList "/configure `"$($cfg.ActualXMLPath)`"" -Wait -PassThru -WindowStyle Hidden -WorkingDirectory $setupDir2
