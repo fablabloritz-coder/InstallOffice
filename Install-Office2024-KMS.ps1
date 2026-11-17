@@ -1971,8 +1971,9 @@ $script:BgDoWorkHandler = {
             }
             bg_Step 0 "done"
         } catch {
-            bg_Step 0 "error" ; bg_Log "Echec : $($_.Exception.Message)" "ERROR" ; bg_Log "Solution : Desinstaller manuellement via Parametres > Applications." "WARN"
-            bg_Popup "Erreur desinstallation" "Echec.`n`nSolution : Desinstaller manuellement via Parametres > Applications puis relancer." "Error"
+            $solDesinst = "Fermez Word, Excel, Outlook et PowerPoint, attendez la fin des processus 'OfficeClickToRun' / 'setup' dans le Gestionnaire des taches, et redemarrez le poste si une mise a jour Office est en attente, puis relancez le deploiement. En dernier recours seulement : Parametres > Applications > Microsoft Office > Desinstaller, ou l'outil SaRA de Microsoft, puis relancez."
+            bg_Step 0 "error" ; bg_Log "Echec : $($_.Exception.Message)" "ERROR" ; bg_Log "Solution : $solDesinst" "WARN"
+            bg_Popup "Erreur desinstallation" "Echec.`n`nSolution :`n$solDesinst" "Error"
             bg_Abort "Deploiement interrompu." ; return
         }
     } else { bg_Step 0 "skipped" ; bg_Log $(if($ao){"Mode activation seule."}else{"Option non cochee."}) }
@@ -1985,10 +1986,17 @@ $script:BgDoWorkHandler = {
         bg_Step 1 "running" ; $sync.StatusText = "Etape 2/5 - Verification des prerequis..."
 
         # Verifier setup.exe (chemin libre)
-        if (!(Test-Path $cfg.SetupExePath)) {
+        # Test-Path refuse une chaine vide : on teste le vide d'abord, sinon l'erreur
+        # de liaison interrompt silencieusement le worker sans aucun message.
+        if ([string]::IsNullOrWhiteSpace([string]$cfg.SetupExePath) -or -not (Test-Path -LiteralPath ([string]$cfg.SetupExePath))) {
+            $solSetup = if ([string]::IsNullOrWhiteSpace([string]$cfg.SetupExePath)) {
+                "Aucun chemin memorise : cliquez sur 'Parcourir...' et selectionnez setup.exe (Office Deployment Tool)."
+            } else {
+                "Ce fichier n'existe plus a cet emplacement : il a pu etre deplace, supprime par l'antivirus, ou le chemin enregistre vient d'un autre poste. Cliquez sur 'Parcourir...' pour le reselectionner, ou reinstallez l'ODT (archive Microsoft, lien dans le README) et extrayez setup.exe a cote de cet outil."
+            }
             bg_Step 1 "error" ; bg_Log "setup.exe introuvable : $($cfg.SetupExePath)" "ERROR"
-            bg_Log "Solution : Utilisez le bouton Parcourir pour localiser setup.exe (ODT)." "WARN"
-            bg_Popup "setup.exe introuvable" "Chemin : $($cfg.SetupExePath)`n`nSolution : Cliquez sur 'Parcourir...' pour localiser setup.exe." "Error"
+            bg_Log "Solution : $solSetup" "WARN"
+            bg_Popup "setup.exe introuvable" "Chemin : $($cfg.SetupExePath)`n`nSolution :`n$solSetup" "Error"
             bg_Abort "Deploiement interrompu." ; return
         }
         bg_Log "setup.exe OK : $($cfg.SetupExePath)" "OK"
@@ -2319,11 +2327,12 @@ $script:BgDoWorkHandler = {
             bg_Step 3 "error" ; bg_Log "Echec : $($_.Exception.Message)" "ERROR"
             $ec4 = if ($_.Exception.Message -match 'code de sortie\s*:\s*(-?\d+)') { [int]$matches[1] } else { -999 }
             $sol4 = switch ($ec4) {
-                -1     { "Installation annulee ou bloquee par Office existant. Cochez 'Desinstaller l'ancienne version d'Office' puis relancez le deploiement." }
-                30066  { "Pre-requis non satisfait : version Office incompatible presente. Cochez 'Desinstaller' puis relancez." }
-                17029  { "Version Office deja installee detectee. Cochez 'Desinstaller l'ancienne version' puis relancez." }
-                17002  { "Installation incomplete. Redemarrez le poste et relancez." }
-                default { "Espace disque min $($cfg.DiskMinGB) Go requis. Fermez toute application Office. Si une ancienne version est presente, cochez 'Desinstaller' et relancez." }
+                -999   { "setup.exe n'a pas pu demarrer : le fichier est peut-etre bloque (clic droit > Proprietes > Debloquer) ou mis en quarantaine par l'antivirus. Verifiez le chemin setup.exe puis relancez." }
+                32     { "Fichier verrouille pendant l'installation : fermez Word/Excel/Outlook, empechez l'antivirus de scanner le dossier des sources (C:\InstallOffice2024), ou redemarrez le poste, puis relancez." }
+                30066  { "Une autre installation est en cours (Windows Installer ou Click-to-Run occupe). Fermez les applications Office, attendez la fin des processus 'OfficeClickToRun' / 'setup' (redemarrez si besoin), puis relancez." }
+                17029  { "Une version d'Office est deja installee : cochez 'Desinstaller l'ancienne version d'Office' puis relancez le deploiement." }
+                17002  { "Installation inachevee, souvent une coexistence avec une installation precedente : redemarrez le poste, verifiez qu'aucune application Office ne tourne, puis relancez." }
+                default { "Causes usuelles : desinstallation precedente incomplete (cochez 'Desinstaller l'ancienne version'), antivirus qui verrouille les fichiers sources, application Office restee ouverte, ou redemarrage en attente. Le journal ODT detaille est ecrit dans %TEMP%. L'espace disque a deja ete verifie a l'etape 2." }
             }
             bg_Log "Solution : $sol4" "WARN"
             bg_Popup "Erreur installation" "$($_.Exception.Message)`n`nSolution :`n$sol4" "Error"
@@ -2403,10 +2412,10 @@ $script:BgDoWorkHandler = {
                     bg_Step 4 "error"
                     $err = $_.Exception.Message
                     $sol = switch -Wildcard ($err) {
-                        "*injoignable*" { "PC sur reseau lycee (cable/VPN). Port $($cfg.KmsPort) requis." }
-                        "*Acces*"       { "Relancez en tant qu'Administrateur." }
-                        "*insuffisant*" { "Contactez l'IT Grand Est : seuil KMS non atteint." }
-                        default         { "Contactez l'IT Grand Est avec ce message." }
+                        "*injoignable*" { "Le serveur KMS ne repond pas : verifiez que le poste est sur le reseau du lycee (cable ou VPN), que l'adresse KMS et le port $($cfg.KmsPort) sont corrects (resolution du nom avec 'nslookup'), et que le pare-feu autorise le port $($cfg.KmsPort) en sortie vers ce serveur." }
+                        "*Acces*"       { "Acces refuse : relancez l'outil en Administrateur, verifiez que le service 'Office Software Protection Platform' (osppsvc) est demarre, et que l'antivirus ne bloque pas cscript/ospp.vbs." }
+                        "*insuffisant*" { "Le serveur KMS n'a pas encore atteint son seuil d'activation (25 clients Windows / 5 clients Office vus). Ce n'est pas un probleme de ce poste : reessayez plus tard ou contactez l'IT Grand Est." }
+                        default         { "Erreur d'activation non identifiee : notez le code affiche, verifiez l'adresse KMS dans Options, puis contactez l'IT Grand Est avec ce message." }
                     }
                     bg_Log "Echec KMS : $err" "ERROR" ; bg_Log "Solution : $sol" "WARN"
                     bg_Popup "Erreur KMS" "Echec.`nDetail : $err`n`nSolution : $sol" "Error"
