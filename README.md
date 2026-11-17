@@ -11,6 +11,7 @@ d'un réseau pédagogique.
 | `Install-Office2024-KMS.ps1` | Source de l'interface (v8.1) |
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (35 cas) |
 | `setup.exe` | Office Deployment Tool — **non versionné**, à récupérer (voir ci-dessous) |
 
 ## Prérequis
@@ -69,6 +70,21 @@ Invoke-PS2EXE -InputFile "Install-Office2024-KMS.ps1" `
 - Journal : `C:\InstallOffice2024\deploy_AAAAMMJJ_HHMMSS.log` (bouton « Exporter » dans l'interface)
 - Configuration du poste : `%APPDATA%\Office2024Deploy\config.json`
   (mots de passe et clé produit chiffrés en DPAPI, donc liés au compte utilisateur)
+
+## Contrôles automatisés
+
+```powershell
+powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps1
+```
+
+Rejoue les cas clés sans rien installer : `SourcePath` imposé au téléchargement et à
+l'installation, destination des sources et verdict d'espace disque, codes de sortie ODT
+(32, 30066, 17002, 17029), échecs KMS (0xC004F074, 0x80070005, 0xC004F038, réponse
+inconnue, `ospp.vbs` absent), dépôt invalide, proxy injoignable et bilan final.
+
+Comment : un faux `setup.exe` est compilé dans `%TEMP%` (il enregistre ses arguments et
+renvoie le code voulu) et un `ospp.vbs` factice remplace celui d'Office ; aucun
+téléchargement, aucune modification du poste. Code de sortie `0` si tout passe, `1` sinon.
 
 ## Limites connues
 
