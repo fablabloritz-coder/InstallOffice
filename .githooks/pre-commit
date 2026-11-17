@@ -1,0 +1,47 @@
+#!/bin/sh
+# Controle automatique avant chaque commit : l'EXE livre doit rester aligne sur
+# le script (empreinte du script embarque) et sur ses proprietes de compilation.
+# Le travail est fait par Test-InstallOffice.ps1, seule source de verite.
+#
+# Activation, une fois par clone :
+#   git config core.hooksPath .githooks
+#
+# Le controle ne porte que sur les fichiers qui decident du binaire : un commit
+# qui n'y touche pas (README, XML, workflow) n'est pas ralenti.
+# Dernier recours, volontaire et visible dans l'historique : git commit --no-verify
+
+set -u
+racine=$(git rev-parse --show-toplevel) || exit 1
+cd "$racine" || exit 1
+
+modifies=$(git diff --cached --name-only -- \
+    Install-Office2024-KMS.ps1 \
+    Install-Office2024-KMS.exe \
+    Test-InstallOffice.ps1)
+if [ -z "$modifies" ]; then
+    exit 0
+fi
+
+if ! command -v powershell >/dev/null 2>&1; then
+    echo "pre-commit: powershell introuvable, controle de l'EXE non execute." >&2
+    exit 0
+fi
+
+echo "pre-commit: controle de l'EXE livre (Test-InstallOffice.ps1)..."
+journal=$(mktemp 2>/dev/null) || journal="/tmp/pre-commit-$$.log"
+powershell -NoProfile -STA -ExecutionPolicy Bypass -File "./Test-InstallOffice.ps1" >"$journal" 2>&1
+code=$?
+if [ "$code" -ne 0 ]; then
+    echo "pre-commit: ECHEC du controle (code $code) - commit refuse." >&2
+    echo "--- echecs ---" >&2
+    grep -E "ECHEC|RESULTAT" "$journal" | head -20 >&2
+    echo "--- fin ---" >&2
+    echo "Detail complet :" >&2
+    echo "  powershell -NoProfile -STA -ExecutionPolicy Bypass -File ./Test-InstallOffice.ps1" >&2
+    echo "Pour forcer malgre tout (deconseille) : git commit --no-verify" >&2
+    rm -f "$journal"
+    exit 1
+fi
+rm -f "$journal"
+echo "pre-commit: OK - EXE aligne sur le script et ses proprietes."
+exit 0

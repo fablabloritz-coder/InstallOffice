@@ -12,6 +12,8 @@ d'un réseau pédagogique.
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
 | `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (60 cas) |
+| `.githooks/pre-commit` | Refuse le commit si l'EXE livré ne passe plus ces contrôles |
+| `.github/workflows/controle-exe.yml` | Même contrôle sur GitHub Actions (push sur `main`, pull request) |
 | `setup.exe` | Office Deployment Tool — **non versionné**, à récupérer (voir ci-dessous) |
 
 ## Prérequis
@@ -111,6 +113,27 @@ même aboutir à une restauration complète.
 Comment : un faux `setup.exe` est compilé dans `%TEMP%` (il enregistre ses arguments et
 renvoie le code voulu) et un `ospp.vbs` factice remplace celui d'Office ; aucun
 téléchargement, aucune modification du poste. Code de sortie `0` si tout passe, `1` sinon.
+
+### Exécution automatique
+
+Le contrôle ne dépend pas de la mémoire de celui qui commite :
+
+- **avant chaque commit**, le hook `.githooks/pre-commit` lance la suite dès que
+  `Install-Office2024-KMS.ps1`, `Install-Office2024-KMS.exe` ou `Test-InstallOffice.ps1`
+  est dans le commit, et refuse le commit si elle échoue (les échecs sont affichés, pas
+  avalés). Il s'active une fois par clone :
+
+  ```powershell
+  git config core.hooksPath .githooks
+  ```
+
+  Un commit qui ne touche aucun de ces trois fichiers (README, XML, workflow) n'est pas
+  ralenti ; `git commit --no-verify` reste possible pour un cas exceptionnel, et se voit
+  dans l'historique.
+- **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la même suite sur
+  `windows-latest` à chaque push sur `main` et à chaque pull request : un EXE oublié ou
+  compilé autrement fait échouer la vérification côté serveur, même si le hook local
+  n'était pas installé.
 
 ## Limites connues
 

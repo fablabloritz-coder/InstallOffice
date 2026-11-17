@@ -1,0 +1,35 @@
+name: Controle de l'EXE livre
+
+# Meme controle que le hook pre-commit, mais cote serveur : un push direct sur
+# main ou une pull request dont l'EXE ne correspond plus au script echoue ici.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  controle:
+    name: Test-InstallOffice.ps1
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+
+      - name: Version de PowerShell
+        shell: powershell
+        run: $PSVersionTable.PSVersion.ToString()
+
+      - name: Controles hors ligne (empreinte, proprietes de l'EXE, scenarios)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          & powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps1
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            throw "Test-InstallOffice.ps1 a echoue (code $code) : EXE desynchronise ou mal compile."
+          }

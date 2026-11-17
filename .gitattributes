@@ -1,0 +1,4 @@
+# Le hook et le workflow sont executes par sh / GitHub Actions : ils doivent
+# rester en LF meme sur un clone Windows avec core.autocrlf=true.
+.githooks/* text eol=lf
+.github/workflows/* text eol=lf
