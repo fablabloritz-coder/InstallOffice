@@ -1,0 +1,21 @@
+<!-- Modele de configuration ODT pour Office LTSC 2024 (canal PerpetualVL2024).
+     Pour une installation SANS acces Internet, ajouter l'attribut SourcePath
+     sur la balise <Add>, pointant vers le dossier de depot, par exemple :
+       SourcePath="\srv-fichiers\Logiciels\Office2024"
+     Le script genere ce fichier automatiquement a partir de ses options ;
+     ce modele sert de reference ou de point de depart pour un XML personnalise. -->
+<Configuration>
+  <Add OfficeClientEdition="64" Channel="PerpetualVL2024">
+    <Product ID="ProPlus2024Volume">
+      <Language ID="fr-fr" />
+      <ExcludeApp ID="Outlook" />
+      <ExcludeApp ID="OneNote" />
+      <ExcludeApp ID="Access" />
+      <ExcludeApp ID="Teams" />
+      <ExcludeApp ID="OneDrive" />
+      <ExcludeApp ID="Lync" />
+    </Product>
+  </Add>
+  <Display Level="None" AcceptEULA="TRUE" />
+  <Property Name="AUTOACTIVATE" Value="0" />
+</Configuration>

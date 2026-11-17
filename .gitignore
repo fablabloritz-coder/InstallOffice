@@ -1,0 +1,11 @@
+# Artefacts de build et utilitaires temporaires
+_build*.exe
+_*.ps1
+_layout.txt
+*.log
+
+# Outil Office Deployment Tool (binaire Microsoft, ~7 Mo) : a telecharger, pas a versionner
+setup.exe
+
+# Configuration locale du poste (chemin setup.exe, KMS, depot)
+config.json
