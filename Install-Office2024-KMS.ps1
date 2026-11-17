@@ -2260,8 +2260,11 @@ $script:BgDoWorkHandler = {
                     17002 { "Code 17002 = installation incomplete. Redemarrez le poste et reessayez." }
                     30066 { "Code 30066 = fichiers introuvables. Verifiez le chemin setup.exe." }
                     default {
-                        $p = if ($cfg.ProxyEnabled) { " Si proxy actif, verifiez-le dans Options." } else { "" }
-                        "Verifiez la connexion Internet et que le script est lance en Administrateur.$p"
+                        if ($cfg.ProxyEnabled) {
+                            "Aucun acces au CDN Microsoft via le proxy $($cfg.ProxyHost):$($cfg.ProxyPort). Verifiez dans Options : adresse et port du proxy, et les exceptions (officecdn.microsoft.com et config.office.com doivent etre autorises en 443). Si le proxy exige une authentification (erreur 407), le telechargement est impossible : le service Click-to-Run tourne en LocalSystem et ne peut pas s'authentifier. Utilisez le mode 'Depot de sources' : telecharger les sources une fois depuis un poste autorise, puis cocher ce mode ici pour installer sans aucun acces Internet."
+                        } else {
+                            "Aucun acces au CDN Microsoft depuis ce poste. Verifiez le filtrage reseau, ou renseignez le proxy dans Options. Alternative hors ligne : mode 'Depot de sources' (sources telechargees une fois, puis installation et activation KMS sans Internet)."
+                        }
                     }
                 }
                 bg_Log "Solution : $sol" "WARN"
