@@ -326,7 +326,9 @@ function Get-PreChecks {
     return @{
         FreeGB         = $freeGB
         HasEnoughSpace = ($freeGB -ge $DISK_MIN_GB)
-        HasSetup       = (Test-Path $resolvedSetupPath)
+        # Test-Path refuse une chaine vide : sans ce garde-fou, Get-PreChecks leve et
+        # le panneau pre-vol garde ses anciennes couleurs (vert perime).
+        HasSetup       = (-not [string]::IsNullOrWhiteSpace($resolvedSetupPath)) -and (Test-Path -LiteralPath $resolvedSetupPath)
         ResolvedSetup  = $resolvedSetupPath
         HasNet         = [System.Net.NetworkInformation.NetworkInterface]::GetIsNetworkAvailable()
         IsWin10Plus    = $isWin10Plus
@@ -2017,7 +2019,7 @@ $script:BgDoWorkHandler = {
         try {
             if ($cfg.UseCustomXML) {
                 # Verifier le fichier XML fourni
-                if (!(Test-Path $cfg.CustomXMLPath)) { throw "Fichier XML introuvable : $($cfg.CustomXMLPath)" }
+                if ([string]::IsNullOrWhiteSpace([string]$cfg.CustomXMLPath) -or -not (Test-Path -LiteralPath ([string]$cfg.CustomXMLPath))) { throw "Fichier XML introuvable : $($cfg.CustomXMLPath)" }
                 $cfg.ActualXMLPath = $cfg.CustomXMLPath
                 bg_Log "XML personnalise utilise : $(Split-Path $cfg.CustomXMLPath -Leaf)" "OK"
             } else {
