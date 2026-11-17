@@ -361,6 +361,45 @@ try {
     $netshApres = ((& netsh winhttp show proxy 2>&1) -join " ").Trim()
     $intact = (($regApres.ProxyEnable -eq $regAvant.ProxyEnable) -and ($regApres.ProxyServer -eq $regAvant.ProxyServer) -and ($regApres.ProxyOverride -eq $regAvant.ProxyOverride) -and ($envApres.HTTP_PROXY -eq $envReel.HTTP_PROXY) -and ($envApres.https_proxy -eq $envReel.https_proxy) -and ($netshApres -eq $netshAvant))
     Check "poste reel intact (HKCU, environnement, netsh)" $intact ("regle=" + $regApres.ProxyServer + " env=" + $envApres.HTTP_PROXY + " netsh=" + $netshApres)
+
+    Section "9. Snapshot du proxy : copie, et echec netsh"
+    # 1) l'etat retourne par bg_ApplyProxy doit etre une copie, pas une vue de la machine
+    $machine.WinInet.ProxyEnable = 42
+    $machine.WinInet.ProxyServer = "pollue"
+    $machine.Env["HTTP_PROXY"] = "http://pollue:1"
+    $machine.Env["http_proxy"] = "pollue"
+    $machine.WinHttpServer = "pollue"
+    $copieIntacte = (($etat.WinInet.ProxyEnable -eq $avant.WinInet.ProxyEnable) -and
+                     ($etat.WinInet.ProxyServer -eq $avant.WinInet.ProxyServer) -and
+                     ($etat.Env["HTTP_PROXY"] -eq $avant.Env["HTTP_PROXY"]) -and
+                     ($etat.Env["http_proxy"] -eq $avant.Env["http_proxy"]) -and
+                     ($etat.WinHttpDirect -eq $avant.WinHttpDirect))
+    Check "snapshot : inchange malgre une mutation de la machine" $copieIntacte ("snapshot=" + $etat.WinInet.ProxyEnable + "/" + $etat.Env["HTTP_PROXY"] + "  machine=" + $machine.WinInet.ProxyEnable + "/" + $machine.Env["HTTP_PROXY"])
+
+    # 2) la lecture reelle du poste (sans ecriture) renvoie des objets neufs a chaque appel
+    $vraiSink = bg_ProxySink $null
+    $lu1 = & $vraiSink.Read
+    $lu1.WinInet["ProxyEnable"] = 999
+    $lu1.Env["HTTP_PROXY"] = "pollue"
+    $lu2 = & $vraiSink.Read
+    Check "lecture reelle : etat neuf a chaque appel" (($lu2.WinInet.ProxyEnable -ne 999) -and ($lu2.Env["HTTP_PROXY"] -ne "pollue")) ("ProxyEnable=" + $lu2.WinInet.ProxyEnable)
+
+    # 3) netsh en erreur : l'application continue (WinINet + environnement) et le dit
+    $fauxKo = @{}
+    foreach ($k in @($faux.Keys)) { $fauxKo[$k] = $faux[$k] }
+    $fauxKo.Apply = { param($srv,$byp) $appels.Add("winhttp-set-echec " + $srv) ; @{ Confirmed = $false ; Detail = "" ; Error = "Access is denied." } }
+    $machine.WinHttpServer = "" ; $machine.WinHttpDirect = $avant.WinHttpDirect ; $machine.WinHttpExists = $avant.WinHttpExists ; $machine.WinHttpValue = $avant.WinHttpValue
+    foreach ($k in @($avant.WinInet.Keys)) { $machine.WinInet[$k] = $avant.WinInet[$k] }
+    foreach ($n in @("HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy")) { $machine.Env[$n] = $avant.Env[$n] }
+    $script:ProxyLogs.Clear() ; $appels.Clear()
+    $cfgP.ProxySink = $fauxKo
+    $etatKo = bg_ApplyProxy $cfgP -ProxyHost "10.0.0.1" -ProxyPort "3128" -BypassList "<local>"
+    $tKo = ($script:ProxyLogs -join " | ")
+    Check "netsh en erreur : avertissement explicite" ($tKo -match 'Echec netsh winhttp set proxy : Access is denied') $tKo
+    Check "netsh en erreur : WinINet et environnement appliques quand meme" (($machine.WinHttpServer -eq "") -and ($machine.WinInet.ProxyEnable -eq 1) -and ($machine.Env["HTTP_PROXY"] -eq "http://10.0.0.1:3128")) ("winhttp=[" + $machine.WinHttpServer + "] inet=" + $machine.WinInet.ProxyEnable + " env=" + $machine.Env["HTTP_PROXY"])
+    bg_RestoreProxy $cfgP -State $etatKo
+    Check "netsh en erreur : restauration complete malgre l'echec" ((Copy-Etat $machine | ConvertTo-Json -Compress -Depth 5) -eq ($avant | ConvertTo-Json -Compress -Depth 5)) (Copy-Etat $machine | ConvertTo-Json -Compress -Depth 5)
+    Check "netsh en erreur : journal de restauration" ((($script:ProxyLogs -join " | ") -match "Configuration proxy d'origine restauree") -and (($script:ProxyLogs -join " | ") -match 'Proxy WinINet \(session\) applique')) ($script:ProxyLogs -join " | ")
 }
 catch {
     Write-Host ("ERREUR DU HARNAIS : " + $_.Exception.Message) -ForegroundColor Red
