@@ -1841,6 +1841,18 @@ $script:BgDoWorkHandler = {
         return $info
     }
 
+    # --- Verdict d'espace pour la destination des sources (pur, donc testable) ---
+    function bg_SpaceVerdict {
+        param($FreeGB, [int]$NeedGB, [string]$Root)
+        if ($null -eq $FreeGB) {
+            return @{ Level = "WARN" ; Msg = "Espace libre non verifiable a cet emplacement (chemin reseau ou inaccessible) : prevoyez environ $NeedGB Go pour les sources." }
+        }
+        if ($FreeGB -lt $NeedGB) {
+            return @{ Level = "WARN" ; Msg = "Espace insuffisant sur ${Root} : $FreeGB Go libres, environ $NeedGB Go necessaires pour les sources. Le telechargement va echouer : liberez de l'espace ou choisissez un autre dossier de travail." }
+        }
+        return @{ Level = "OK" ; Msg = "Espace disque OK a cet emplacement : $FreeGB Go libres sur ${Root} (environ $NeedGB Go necessaires)." }
+    }
+
     # --- Etat proxy systeme (sauvegarde) ---
     function bg_GetProxyState {
         $st = @{ WinHttpExists = $false ; WinHttpValue = $null ; WinHttpDirect = $true ; WinInet = @{} ; Env = @{} }
@@ -2239,13 +2251,8 @@ $script:BgDoWorkHandler = {
                         $srcFreeGB = [math]::Round($srcDrive.AvailableFreeSpace / 1GB, 1)
                     }
                 } catch {}
-                if ($null -eq $srcFreeGB) {
-                    bg_Log "Espace libre non verifiable a cet emplacement (chemin reseau ou inaccessible) : prevoyez environ $srcNeedGB Go pour les sources." "WARN"
-                } elseif ($srcFreeGB -lt $srcNeedGB) {
-                    bg_Log "Espace insuffisant sur ${srcRootPath} : $srcFreeGB Go libres, environ $srcNeedGB Go necessaires pour les sources. Le telechargement va echouer : liberez de l'espace ou choisissez un autre dossier de travail." "WARN"
-                } else {
-                    bg_Log "Espace disque OK a cet emplacement : $srcFreeGB Go libres sur ${srcRootPath} (environ $srcNeedGB Go necessaires)." "OK"
-                }
+                $spaceCheck = bg_SpaceVerdict -FreeGB $srcFreeGB -NeedGB $srcNeedGB -Root $srcRootPath
+                bg_Log $spaceCheck.Msg $spaceCheck.Level
 
                 # Lancer setup.exe sans -Wait pour pouvoir surveiller la progression
                 $proc = Start-Process -FilePath $cfg.SetupExePath `
