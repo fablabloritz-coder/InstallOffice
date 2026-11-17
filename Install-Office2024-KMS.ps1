@@ -1813,7 +1813,15 @@ $script:BgDoWorkHandler = {
                 $missing++
             }
         }
-        if ($missing -eq 0) { return @{ Path = $XmlPath ; Injected = $false } }
+        if ($missing -eq 0) {
+            # SourcePath deja present : on remonte celui du XML, c'est la vraie destination.
+            $existant = ""
+            foreach ($a in $adds) {
+                $v = [string]$a.GetAttribute("SourcePath")
+                if (-not [string]::IsNullOrWhiteSpace($v)) { $existant = $v ; break }
+            }
+            return @{ Path = $XmlPath ; Injected = $false ; Source = $existant }
+        }
 
         # On ne modifie jamais le fichier fourni : copie dediee au telechargement.
         if (-not (Test-Path -LiteralPath $WorkDir)) { New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null }
@@ -1823,7 +1831,7 @@ $script:BgDoWorkHandler = {
         $settings.Indent = $true
         $writer = [System.Xml.XmlWriter]::Create($out, $settings)
         try { $doc.Save($writer) } finally { $writer.Close() }
-        return @{ Path = $out ; Injected = $true }
+        return @{ Path = $out ; Injected = $true ; Source = $SourcePath }
     }
 
     # --- Etat proxy systeme (sauvegarde) ---
@@ -2209,13 +2217,40 @@ $script:BgDoWorkHandler = {
 
                 # Sans attribut SourcePath, ODT ecrit les sources dans le repertoire courant
                 # (plusieurs Go dans le dossier de l'outil) : on impose la destination.
-                $srcRoot = if (-not [string]::IsNullOrWhiteSpace([string]$cfg.SourcePath)) { [string]$cfg.SourcePath } else { [string]$cfg.LocalDataPath }
-                $spInfo  = bg_EnsureSourcePath -XmlPath ([string]$cfg.ActualXMLPath) -SourcePath $srcRoot -WorkDir ([string]$cfg.LocalDataPath)
+                $srcFallback = if (-not [string]::IsNullOrWhiteSpace([string]$cfg.SourcePath)) { [string]$cfg.SourcePath } else { [string]$cfg.LocalDataPath }
+                $spInfo  = bg_EnsureSourcePath -XmlPath ([string]$cfg.ActualXMLPath) -SourcePath $srcFallback -WorkDir ([string]$cfg.LocalDataPath)
+                # Destination finale = ce que le XML demande reellement (impose ou deja present).
+                $srcRoot = if (-not [string]::IsNullOrWhiteSpace([string]$spInfo.Source)) { [string]$spInfo.Source } else { $srcFallback }
                 if ($spInfo.Injected) {
                     $cfg.ActualXMLPath = $spInfo.Path
                     bg_Log "XML sans SourcePath : copie avec SourcePath=$srcRoot utilisee ($(Split-Path $spInfo.Path -Leaf)). Aucune ecriture dans le repertoire courant." "WARN"
                 } else {
                     bg_Log "XML : SourcePath present - telechargement confine a la destination indiquee." "OK"
+                }
+
+                # La destination reelle peut differer du dossier de travail (XML fourni avec
+                # son propre SourcePath) : la surveillance doit suivre ce dossier-la.
+                $officeDir = Join-Path $srcRoot "Office"
+                bg_Log "Destination des sources : $officeDir" "INFO"
+
+                # Espace disque a CET emplacement (pas seulement sur C:)
+                # Sources Office : ~3 Go en pratique, 4 Go avec marge.
+                $srcNeedGB = 4
+                $srcFreeGB   = $null
+                $srcRootPath = $null
+                try {
+                    $srcRootPath = [System.IO.Path]::GetPathRoot($srcRoot)
+                    if (-not [string]::IsNullOrWhiteSpace($srcRootPath)) {
+                        $srcDrive  = New-Object System.IO.DriveInfo($srcRootPath)
+                        $srcFreeGB = [math]::Round($srcDrive.AvailableFreeSpace / 1GB, 1)
+                    }
+                } catch {}
+                if ($null -eq $srcFreeGB) {
+                    bg_Log "Espace libre non verifiable a cet emplacement (chemin reseau ou inaccessible) : prevoyez environ $srcNeedGB Go pour les sources." "WARN"
+                } elseif ($srcFreeGB -lt $srcNeedGB) {
+                    bg_Log "Espace insuffisant sur ${srcRootPath} : $srcFreeGB Go libres, environ $srcNeedGB Go necessaires pour les sources. Le telechargement va echouer : liberez de l'espace ou choisissez un autre dossier de travail." "WARN"
+                } else {
+                    bg_Log "Espace disque OK a cet emplacement : $srcFreeGB Go libres sur ${srcRootPath} (environ $srcNeedGB Go necessaires)." "OK"
                 }
 
                 # Lancer setup.exe sans -Wait pour pouvoir surveiller la progression
