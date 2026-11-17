@@ -79,7 +79,9 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps
 
 Vérifie d'abord que l'EXE distribué correspond au script : l'empreinte SHA-256 du script
 embarqué dans le binaire doit être celle du `.ps1`, sinon le contrôle s'arrête avec un
-message **RECOMPILER** (section « Compilation de l'EXE »).
+message **RECOMPILER** (section « Compilation de l'EXE »). Si le binaire n'expose pas le
+script en clair (format compressé ou construction différente), l'échec dit que l'empreinte
+n'est **pas vérifiable** — sans conseil de recompilation, qui serait alors trompeur.
 
 Rejoue ensuite les cas clés sans rien installer : `SourcePath` imposé au téléchargement et à
 l'installation, destination des sources et verdict d'espace disque, codes de sortie ODT

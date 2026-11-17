@@ -162,7 +162,8 @@ try {
             }
         } catch { }
         if ($null -eq $embarque) {
-            Check "EXE : script embarque lisible" $false ("aucune ressource .ps1 dans le binaire - " + $recompiler)
+            # Pas une derive : le binaire n'expose pas le script en clair (format different).
+            Check "EXE : script embarque lisible" $false ("aucune ressource .ps1 en clair dans " + (Split-Path $exePath -Leaf) + " (binaire compresse ou construit autrement) : empreinte non verifiable, donc aucune recompilation a prescrire - verifier le format d'embarquement")
         } else {
             $hExe = [System.BitConverter]::ToString($sha.ComputeHash($embarque)).Replace("-", "")
             $okExe = ($hExe -eq $hScript)
