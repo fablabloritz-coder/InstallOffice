@@ -11,7 +11,7 @@ d'un réseau pédagogique.
 | `Install-Office2024-KMS.ps1` | Source de l'interface (v8.1) |
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (54 cas) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (58 cas) |
 | `setup.exe` | Office Deployment Tool — **non versionné**, à récupérer (voir ci-dessous) |
 
 ## Prérequis
@@ -82,6 +82,11 @@ embarqué dans le binaire doit être celle du `.ps1`, sinon le contrôle s'arrê
 message **RECOMPILER** (section « Compilation de l'EXE »). Si le binaire n'expose pas le
 script en clair (format compressé ou construction différente), l'échec dit que l'empreinte
 n'est **pas vérifiable** — sans conseil de recompilation, qui serait alors trompeur.
+
+Les autres propriétés du binaire livré sont contrôlées aussi : version `8.1.0.0`, titre
+`Deploiement Office 2024`, produit `InstallOffice`, société `Lycee Loritz` et manifeste
+`requireAdministrator`. Chaque écart nomme la valeur trouvée, celle attendue et l'option
+`Invoke-PS2EXE` correspondante.
 
 Rejoue ensuite les cas clés sans rien installer : `SourcePath` imposé au téléchargement et à
 l'installation, destination des sources et verdict d'espace disque, codes de sortie ODT

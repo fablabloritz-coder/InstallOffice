@@ -150,9 +150,10 @@ try {
     if (-not (Test-Path -LiteralPath $exePath)) {
         Check "EXE distribue present" $false ((Split-Path $exePath -Leaf) + " absent - " + $recompiler)
     } else {
+        $exeBytes = [System.IO.File]::ReadAllBytes($exePath)
         $embarque = $null
         try {
-            $asm = [System.Reflection.Assembly]::Load([System.IO.File]::ReadAllBytes($exePath))
+            $asm = [System.Reflection.Assembly]::Load($exeBytes)
             $nom = @($asm.GetManifestResourceNames() | Where-Object { $_ -like "*.ps1" }) | Select-Object -First 1
             if ($nom) {
                 $flux = $asm.GetManifestResourceStream($nom)
@@ -171,6 +172,16 @@ try {
                       else { "L'EXE ne correspond plus au script (" + $hScript.Substring(0, 12) + " vs " + $hExe.Substring(0, 12) + ") - " + $recompiler }
             Check "EXE a jour : empreinte du script embarque" $okExe $detail
         }
+
+        # Autres proprietes du binaire livre : meme commande de compilation que le README.
+        $vi = (Get-Item -LiteralPath $exePath).VersionInfo
+        $cons = " - RECOMPILER avec Invoke-PS2EXE (README, section Compilation de l EXE)"
+        Check "EXE : version 8.1.0.0" (($vi.FileVersion -eq "8.1.0.0") -and ($vi.ProductVersion -eq "8.1.0.0")) ("FileVersion=" + $vi.FileVersion + " ProductVersion=" + $vi.ProductVersion + " (attendu 8.1.0.0 / -Version)" + $cons)
+        Check "EXE : titre" ($vi.FileDescription -eq "Deploiement Office 2024") ("FileDescription=" + $vi.FileDescription + " (attendu : Deploiement Office 2024 / -Title)" + $cons)
+        Check "EXE : produit et societe" (($vi.ProductName -eq "InstallOffice") -and ($vi.CompanyName -eq "Lycee Loritz")) ("ProductName=" + $vi.ProductName + " CompanyName=" + $vi.CompanyName + " (attendu : InstallOffice / -Product, Lycee Loritz / -Company)" + $cons)
+        $asciiExe = [System.Text.Encoding]::ASCII.GetString($exeBytes)
+        $niveau = if ($asciiExe -match 'requestedExecutionLevel[^>]*level\s*=\s*"(?<lvl>[A-Za-z]+)"') { $matches["lvl"] } else { "(absent)" }
+        Check "EXE : manifeste requireAdmin" ($niveau -eq "requireAdministrator") ("requestedExecutionLevel=" + $niveau + " (attendu requireAdministrator / -RequireAdmin)" + $cons)
     }
 
     # fixtures communes
