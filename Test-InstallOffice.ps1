@@ -179,6 +179,8 @@ try {
         Check "EXE : version 8.1.0.0" (($vi.FileVersion -eq "8.1.0.0") -and ($vi.ProductVersion -eq "8.1.0.0")) ("FileVersion=" + $vi.FileVersion + " ProductVersion=" + $vi.ProductVersion + " (attendu 8.1.0.0 / -Version)" + $cons)
         Check "EXE : titre" ($vi.FileDescription -eq "Deploiement Office 2024") ("FileDescription=" + $vi.FileDescription + " (attendu : Deploiement Office 2024 / -Title)" + $cons)
         Check "EXE : produit et societe" (($vi.ProductName -eq "InstallOffice") -and ($vi.CompanyName -eq "Lycee Loritz")) ("ProductName=" + $vi.ProductName + " CompanyName=" + $vi.CompanyName + " (attendu : InstallOffice / -Product, Lycee Loritz / -Company)" + $cons)
+        Check "EXE : OriginalFilename" ($vi.OriginalFilename -eq "Install-Office2024-KMS.exe") ("OriginalFilename=" + $vi.OriginalFilename + " (attendu : Install-Office2024-KMS.exe, donc compiler directement vers ce nom)" + $cons)
+        Check "EXE : InternalName" ($vi.InternalName -eq "Install-Office2024-KMS.exe") ("InternalName=" + $vi.InternalName + " (attendu : Install-Office2024-KMS.exe, donc compiler directement vers ce nom)" + $cons)
         $asciiExe = [System.Text.Encoding]::ASCII.GetString($exeBytes)
         $niveau = if ($asciiExe -match 'requestedExecutionLevel[^>]*level\s*=\s*"(?<lvl>[A-Za-z]+)"') { $matches["lvl"] } else { "(absent)" }
         Check "EXE : manifeste requireAdmin" ($niveau -eq "requireAdministrator") ("requestedExecutionLevel=" + $niveau + " (attendu requireAdministrator / -RequireAdmin)" + $cons)

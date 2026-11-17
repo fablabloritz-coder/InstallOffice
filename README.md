@@ -11,7 +11,7 @@ d'un réseau pédagogique.
 | `Install-Office2024-KMS.ps1` | Source de l'interface (v8.1) |
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (58 cas) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (60 cas) |
 | `setup.exe` | Office Deployment Tool — **non versionné**, à récupérer (voir ci-dessous) |
 
 ## Prérequis
@@ -65,6 +65,11 @@ Invoke-PS2EXE -InputFile "Install-Office2024-KMS.ps1" `
 
 (`Install-Module ps2exe` si le module est absent.)
 
+Compiler **directement** vers `Install-Office2024-KMS.exe` : PS2EXE reprend le nom du
+fichier de sortie dans `OriginalFilename`/`InternalName`, or le contrôle vérifie que ces
+champs valent bien `Install-Office2024-KMS.exe` (compiler vers un fichier temporaire puis le
+renommer laisse `_b.exe` dans les propriétés).
+
 ## Journaux et configuration
 
 - Journal : `C:\InstallOffice2024\deploy_AAAAMMJJ_HHMMSS.log` (bouton « Exporter » dans l'interface)
@@ -85,7 +90,8 @@ n'est **pas vérifiable** — sans conseil de recompilation, qui serait alors tr
 
 Les autres propriétés du binaire livré sont contrôlées aussi : version `8.1.0.0`, titre
 `Deploiement Office 2024`, produit `InstallOffice`, société `Lycee Loritz` et manifeste
-`requireAdministrator`. Chaque écart nomme la valeur trouvée, celle attendue et l'option
+`requireAdministrator`, plus `OriginalFilename` et `InternalName`, qui doivent porter le nom
+du fichier livré. Chaque écart nomme la valeur trouvée, celle attendue et l'option
 `Invoke-PS2EXE` correspondante.
 
 Rejoue ensuite les cas clés sans rien installer : `SourcePath` imposé au téléchargement et à
