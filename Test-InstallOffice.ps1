@@ -875,11 +875,18 @@ public class FakeAuthProxy
     $residuTrouve = @{ Found = $true ; Host = "127.0.0.1" ; Port = 4321 ; Alive = $false ; Reason = "relais mort" ; WinHttp = $true ; WinInet = $false }
     $appels1 = @(Invoke-Demarrage -Corps $corpsDemarrage -Residu $residuTrouve -Reponse $true)
     $journal1 = ($script:JournalDemarrage -join " ").Trim()
-    $ok1 = ($appels1.Count -eq 5) -and ($appels1[0] -eq "Get-RelayPort") -and
-           ($appels1[1] -eq "Test-ProxyRelayResidue:4321") -and ($appels1[2] -eq "Confirm-ProxyRelayRestore") -and
-           ($appels1[3] -eq "Reset-ProxyRelayResidue:winhttp=True,wininet=False") -and ($appels1[4] -eq "Clear-RelayPort") -and
+    # La sequence attendue est verifiee sans figer le nombre total d'appels : un journal
+    # ou une etape ajoutes dans le bloc ne doivent pas casser ce controle. Les seules
+    # etapes surveillees sont retenues, dans leur ordre ; une remise ou un effacement
+    # supplementaire reste donc visible.
+    $attendu1 = @("Get-RelayPort", "Test-ProxyRelayResidue:4321", "Confirm-ProxyRelayRestore",
+                  "Reset-ProxyRelayResidue:winhttp=True,wininet=False", "Clear-RelayPort")
+    $suivi1 = @($appels1 | Where-Object { $v = [string]$_ ;
+                  ($v -eq "Get-RelayPort") -or ($v -like "Test-ProxyRelayResidue:*") -or ($v -eq "Confirm-ProxyRelayRestore") -or
+                  ($v -like "Reset-ProxyRelayResidue:*") -or ($v -eq "Clear-RelayPort") })
+    $ok1 = (($suivi1 -join " > ") -eq ($attendu1 -join " > ")) -and
            ($journal1 -match 'Reliquat supprime') -and ($script:Demarrage.Message -match 'Windows \(WinHTTP\)')
-    Check "demarrage : reliquat trouve -> test puis remise en direct" $ok1 (($appels1 -join " > ") + " | journal=" + $journal1)
+    Check "demarrage : reliquat trouve -> test puis remise en direct" $ok1 ("suite=" + ($suivi1 -join " > ") + " | appels=" + ($appels1 -join " > ") + " | journal=" + $journal1)
 
     # 2. Utilisateur refuse : rien n'est modifie, le marqueur reste pour plus tard.
     $appels2 = @(Invoke-Demarrage -Corps $corpsDemarrage -Residu $residuTrouve -Reponse $false)
