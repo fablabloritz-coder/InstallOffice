@@ -11,7 +11,7 @@ d'un réseau pédagogique.
 | `Install-Office2024-KMS.ps1` | Source de l'interface (v8.1) |
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (76 cas, `-Fast` pour la section 1 seule) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (81 cas, `-Fast` pour la section 1 seule) |
 | `.githooks/pre-commit` | Contrôle rapide de l'index avant chaque commit, refuse l'EXE désynchronisé |
 | `.github/workflows/controle-exe.yml` | Suite complète + contrat de fins de ligne (checkout sans conversion) sur GitHub Actions, à chaque push sur `main` et à chaque pull request |
 | `setup.exe` | Office Deployment Tool — **non versionné**, à récupérer (voir ci-dessous) |
@@ -50,7 +50,18 @@ configuration **WinHTTP de la machine**. Le script :
 3. **restaure** la configuration d'origine en fin de déploiement.
 
 Un proxy **avec authentification** n'est pas exploitable par un service `LocalSystem` :
-c'est précisément le cas d'usage du mode « Dépôt de sources ».
+Un proxy **avec authentification** (407) ne peut pas être satisfait par le service
+Click-to-Run, qui tourne en `LocalSystem` et n'a aucun moyen de saisir un mot de passe.
+C'est pourquoi les champs « Utilisateur » et « Mot de passe » du proxy existent : le
+programme démarre alors un **relais local** (sur `127.0.0.1`, port libre) qui ajoute
+l'en-tête `Proxy-Authorization` vers le vrai proxy et laisse passer le tunnel ; Windows est
+pointé sur ce relais, qui n'est pour Office qu'un proxy ordinaire. Le relais ne vit que le
+temps du déploiement et le mot de passe n'est **jamais** écrit sur disque : il faut le
+ressaisir à chaque lancement. Seule l'authentification **Basic** est prise en charge ; un
+proxy qui n'accepte que NTLM ou Kerberos reste hors de portée, d'où le mode « Dépôt de
+sources ». Si le programme est tué pendant le téléchargement, avant la restauration, le
+poste garderait un proxy WinHTTP pointant sur un port mort : `netsh winhttp reset proxy`
+le remet en accès direct (une fermeture normale restaure tout toute seule).
 
 ## Compilation de l'EXE
 
@@ -62,7 +73,7 @@ Invoke-PS2EXE -InputFile "Install-Office2024-KMS.ps1" `
               -Product "InstallOffice" `
               -Description "Installation Office LTSC 2024 et activation KMS" `
               -Company "Lycee Loritz" `
-              -Version "8.1.0.0"
+              -Version "8.2.0.0"
 ```
 
 (`Install-Module ps2exe` si le module est absent.)
@@ -87,7 +98,7 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps
 
 `-Fast` ne joue que la section 1 — syntaxe du script, empreinte du script embarqué et
 propriétés de l'EXE — soit quelques secondes : c'est exactement ce que lance le hook avant
-chaque commit. Sans commutateur, la suite complète (76 cas) tourne, comme sur GitHub.
+chaque commit. Sans commutateur, la suite complète (81 cas) tourne, comme sur GitHub.
 
 Le **dernier contrôle** de la suite relit ce README, y cherche toutes les mentions
 « N cas » et exige qu'elles valent le total réellement exécuté : un cas ajouté ou retiré
@@ -107,7 +118,7 @@ message **RECOMPILER** (section « Compilation de l'EXE »). Si le binaire n'exp
 script en clair (format compressé ou construction différente), l'échec dit que l'empreinte
 n'est **pas vérifiable** — sans conseil de recompilation, qui serait alors trompeur.
 
-Les autres propriétés du binaire livré sont contrôlées aussi : version `8.1.0.0`, titre
+Les autres propriétés du binaire livré sont contrôlées aussi : version `8.2.0.0`, titre
 `Deploiement Office 2024`, produit `InstallOffice`, société `Lycee Loritz` et manifeste
 `requireAdministrator`, plus `OriginalFilename` et `InternalName`, qui doivent porter le nom
 du fichier livré. Chaque écart nomme la valeur trouvée, celle attendue et l'option
@@ -126,6 +137,11 @@ le poste n'est jamais modifié (vérifié en comparant HKCU, l'environnement et 
 avant/après). L'état sauvegardé est aussi vérifié comme une **copie** : une mutation de la
 machine après `bg_ApplyProxy` ne doit pas l'altérer, et un échec de `netsh` doit tout de
 même aboutir à une restauration complète.
+
+Le relais d'authentification est vérifié de la même façon, contre un proxy amont simulé
+sur la loopback : un `CONNECT` muni des bons identifiants doit rendre `200` et laisser
+passer les données dans les deux sens, un mauvais mot de passe doit rendre `407`, et
+`Stop-ProxyRelay` doit libérer le port d'écoute.
 
 Comment : un faux `setup.exe` est compilé dans `%TEMP%` (il enregistre ses arguments et
 renvoie le code voulu) et un `ospp.vbs` factice remplace celui d'Office ; aucun
@@ -158,7 +174,7 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   ralenti ; `git commit --no-verify` reste possible pour un cas exceptionnel, et se voit
   dans l'historique.
 - **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la suite
-  **complète** (76 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
+  **complète** (81 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
   request : un EXE oublié ou compilé autrement fait échouer la vérification côté serveur,
   même si le hook local n'était pas installé — et sans rien imposer à la boucle locale.
 - **le contrat de fins de ligne y est vérifié aussi** : un second job refait un checkout
@@ -170,6 +186,6 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
 ## Limites connues
 
 - Windows uniquement, architecture 64 bits
-- Pas de proxy authentifié (voir ci-dessus)
+- Proxy authentifié NTLM/Kerberos non pris en charge : seul Basic passe par le relais local (voir ci-dessus)
 - Binaire non signé : SmartScreen peut afficher un avertissement
 - L'activation KMS suppose que le poste est sur le réseau du lycée (ou en VPN)

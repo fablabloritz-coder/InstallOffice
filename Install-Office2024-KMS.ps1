@@ -9,6 +9,10 @@
 #  + PROXY : test CONNECT vers officecdn.microsoft.com AVANT le telechargement
 #      -> diagnostic explicite (proxy injoignable / destination bloquee / 407).
 #  + PROXY : sauvegarde puis restauration exacte de la configuration d'origine.
+#  + PROXY AUTHENTIFIE : un relais local (loopback) ajoute l'en-tete
+#      Proxy-Authorization : le service Click-to-Run, incapable de repondre a un
+#      407, voit un proxy ordinaire. Identifiants saisis dans Options, mot de
+#      passe jamais enregistre.
 #  + MODE 'DEPOT DE SOURCES' : installation + activation KMS sur le reseau
 #      pedagogique SANS telechargement -> plus de changement de reseau par poste.
 #  + Journal : correction des lignes {0:mm}m{0:ss}s non formatees.
@@ -64,7 +68,7 @@ $KMS_PORT           = "1688"
 $DISK_MIN_GB        = 4
 $LOG_FOLDER         = "C:\InstallOffice2024"
 $CONFIG_FILE        = "$env:APPDATA\Office2024Deploy\config.json"
-$VERSION            = "v8.1"
+$VERSION            = "v8.2"
 $STEP_ESTIMATES     = @{ 0=3; 1=1; 2=18; 3=12; 4=1 }
 
 # Liste des applications Office 2024 installables
@@ -261,6 +265,212 @@ function Test-ProxyReadiness {
         [void]$out.Add((Test-ProxyConnect -ProxyHost $ProxyHost -ProxyPort $ProxyPort -TargetHost $t.H -TargetPort $t.P))
     }
     return $out
+}
+
+# --- Relais proxy local avec authentification (loopback) -------------------
+#  Le service Click-to-Run tourne en LocalSystem : il ne peut pas repondre a un
+#  challenge 407. Ce relais ecoute sur la loopback, ajoute l'en-tete
+#  Proxy-Authorization (Basic) vers le proxy reel et laisse passer le tunnel.
+#  Windows est ensuite pointe sur 127.0.0.1:<port> : pour Office, ce relais est
+#  un proxy ordinaire, sans authentification.
+function Start-ProxyRelay {
+    param([string]$UpstreamHost, [int]$UpstreamPort, [string]$User, [string]$Password)
+    $code = @'
+using System;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+
+public class OfficeProxyRelay
+{
+    private readonly string _upHost;
+    private readonly int _upPort;
+    private readonly string _auth;
+    private TcpListener _listener;
+    private Thread _accept;
+    private volatile bool _stopping;
+    private int _port;
+    private int _tunnels;
+    private int _erreurs;
+    private string _derniereErreur = "";
+
+    public OfficeProxyRelay(string upstreamHost, int upstreamPort, string user, string password)
+    {
+        _upHost = upstreamHost;
+        _upPort = upstreamPort;
+        if (!string.IsNullOrEmpty(user))
+        {
+            _auth = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(user + ":" + password));
+        }
+    }
+
+    public int Port { get { return _port; } }
+    public int Tunnels { get { return _tunnels; } }
+    public int Erreurs { get { return _erreurs; } }
+    public string DerniereErreur { get { return _derniereErreur; } }
+
+    public void Start()
+    {
+        _listener = new TcpListener(IPAddress.Loopback, 0);
+        _listener.Start();
+        _port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+        _accept = new Thread(AcceptLoop);
+        _accept.IsBackground = true;
+        _accept.Start();
+    }
+
+    public void Stop()
+    {
+        _stopping = true;
+        try { if (_listener != null) { _listener.Stop(); } } catch { }
+        try { if (_accept != null) { _accept.Join(2000); } } catch { }
+    }
+
+    private void AcceptLoop()
+    {
+        while (!_stopping)
+        {
+            TcpClient client;
+            try { client = _listener.AcceptTcpClient(); }
+            catch { return; }
+            Thread t = new Thread(delegate() { Serve(client); });
+            t.IsBackground = true;
+            t.Start();
+        }
+    }
+
+    private void Serve(TcpClient client)
+    {
+        TcpClient up = null;
+        try
+        {
+            client.NoDelay = true;
+            NetworkStream cs = client.GetStream();
+            string entete = LireEntete(cs);
+            string[] lignes = entete.Split(new string[] { "\r\n" }, StringSplitOptions.None);
+            string requete = lignes.Length > 0 ? lignes[0] : "";
+            string[] parts = requete.Split(' ');
+            if (parts.Length < 2 || !parts[0].Equals("CONNECT", StringComparison.OrdinalIgnoreCase))
+            {
+                Signaler("methode non tunnelisable : " + requete);
+                Ecrire(cs, "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n");
+                return;
+            }
+            string cible = parts[1];
+            up = new TcpClient();
+            up.NoDelay = true;
+            up.Connect(_upHost, _upPort);
+            NetworkStream us = up.GetStream();
+            StringBuilder r = new StringBuilder();
+            r.Append("CONNECT " + cible + " HTTP/1.1\r\n");
+            r.Append("Host: " + cible + "\r\n");
+            r.Append("User-Agent: InstallOffice2024\r\n");
+            if (_auth != null) { r.Append("Proxy-Authorization: " + _auth + "\r\n"); }
+            r.Append("\r\n");
+            byte[] rb = Encoding.ASCII.GetBytes(r.ToString());
+            us.Write(rb, 0, rb.Length);
+            us.Flush();
+
+            string reponse = LireEntete(us);
+            int code = 0;
+            int sp = reponse.IndexOf(' ');
+            if (sp > 0 && reponse.Length >= sp + 4) { int.TryParse(reponse.Substring(sp + 1, 3), out code); }
+            if (code < 200 || code > 299)
+            {
+                Signaler("proxy amont : " + reponse.Replace("\r\n", " ").Trim());
+                Ecrire(cs, reponse);
+                return;
+            }
+            Interlocked.Increment(ref _tunnels);
+            Ecrire(cs, "HTTP/1.1 200 Connection established\r\n\r\n");
+            Tunnel(cs, us);
+        }
+        catch (Exception ex) { Signaler(ex.Message); }
+        finally
+        {
+            try { if (up != null) { up.Close(); } } catch { }
+            try { client.Close(); } catch { }
+        }
+    }
+
+    private static void Tunnel(NetworkStream a, NetworkStream b)
+    {
+        Thread t = new Thread(delegate() { Pomper(a, b); });
+        t.IsBackground = true;
+        t.Start();
+        Pomper(b, a);
+        try { t.Join(2000); } catch { }
+    }
+
+    private static void Pomper(NetworkStream de, NetworkStream vers)
+    {
+        byte[] tampon = new byte[32768];
+        try
+        {
+            int n;
+            while ((n = de.Read(tampon, 0, tampon.Length)) > 0)
+            {
+                vers.Write(tampon, 0, n);
+                vers.Flush();
+            }
+        }
+        catch { }
+        finally
+        {
+            try { de.Close(); } catch { }
+            try { vers.Close(); } catch { }
+        }
+    }
+
+    private static string LireEntete(NetworkStream s)
+    {
+        StringBuilder sb = new StringBuilder();
+        byte[] un = new byte[1];
+        while (sb.Length < 16384)
+        {
+            int n = s.Read(un, 0, 1);
+            if (n <= 0) { break; }
+            sb.Append((char)un[0]);
+            if (sb.Length >= 4 && sb[sb.Length - 1] == '\n' && sb[sb.Length - 2] == '\r' && sb[sb.Length - 3] == '\n' && sb[sb.Length - 4] == '\r') { break; }
+            if (sb.Length >= 2 && sb[sb.Length - 1] == '\n' && sb[sb.Length - 2] == '\n') { break; }
+        }
+        return sb.ToString();
+    }
+
+    private static void Ecrire(NetworkStream s, string texte)
+    {
+        try
+        {
+            byte[] b = Encoding.ASCII.GetBytes(texte);
+            s.Write(b, 0, b.Length);
+            s.Flush();
+        }
+        catch { }
+    }
+
+    private void Signaler(string message)
+    {
+        _derniereErreur = message;
+        Interlocked.Increment(ref _erreurs);
+    }
+}
+'@
+    if (-not ("OfficeProxyRelay" -as [type])) {
+        Add-Type -TypeDefinition $code -Language CSharp -ErrorAction Stop
+    }
+    $relais = New-Object -TypeName OfficeProxyRelay -ArgumentList @($UpstreamHost, $UpstreamPort, $User, $Password)
+    $relais.Start()
+    $script:ProxyRelay = $relais
+    return $relais
+}
+
+function Stop-ProxyRelay {
+    param($Relais)
+    foreach ($r in @($Relais, $script:ProxyRelay)) {
+        if ($null -ne $r) { try { $r.Stop() } catch {} }
+    }
+    $script:ProxyRelay = $null
 }
 
 # --- Genere le contenu XML ODT selon les exclusions ---
@@ -1194,15 +1404,40 @@ $proxyPortBox.Font      = $fontSmall
 $proxyPortBox.Text      = "8080"
 $optPanel.Controls.Add($proxyPortBox)
 
-# Le proxy authentifie n'est pas exploitable : le telechargement ODT est fait par un service
-# LocalSystem, qui ne peut pas s'authentifier. On l'explique au lieu de proposer des champs inutiles.
-$proxyAuthLabel           = New-Object System.Windows.Forms.Label
-$proxyAuthLabel.Location  = New-Object System.Drawing.Point(10, 360)
-$proxyAuthLabel.Size      = New-Object System.Drawing.Size(468, 24)
-$proxyAuthLabel.Text      = "Proxy authentifie : non pris en charge (service Click-to-Run en LocalSystem).`nSur un reseau a proxy authentifie, utiliser le 'Depot de sources'."
-$proxyAuthLabel.Font      = $fontSmall
-$proxyAuthLabel.ForeColor = $clrOrange
-$optPanel.Controls.Add($proxyAuthLabel)
+# Le service Click-to-Run (LocalSystem) ne peut pas repondre a un 407 : les
+# identifiants sont transmis par un relais local (Start-ProxyRelay).
+$proxyAuthUserLabel          = New-Object System.Windows.Forms.Label
+$proxyAuthUserLabel.Location = New-Object System.Drawing.Point(10, 364)
+$proxyAuthUserLabel.Size     = New-Object System.Drawing.Size(66, 18)
+$proxyAuthUserLabel.Text     = "Utilisateur :"
+$proxyAuthUserLabel.Font     = $fontSmall
+$optPanel.Controls.Add($proxyAuthUserLabel)
+
+$proxyAuthUserBox           = New-Object System.Windows.Forms.TextBox
+$proxyAuthUserBox.Location  = New-Object System.Drawing.Point(78, 362)
+$proxyAuthUserBox.Size      = New-Object System.Drawing.Size(148, 22)
+$proxyAuthUserBox.Font      = $fontSmall
+$proxyAuthUserBox.Text      = ""
+$optPanel.Controls.Add($proxyAuthUserBox)
+
+$proxyAuthPassLabel          = New-Object System.Windows.Forms.Label
+$proxyAuthPassLabel.Location = New-Object System.Drawing.Point(232, 364)
+$proxyAuthPassLabel.Size     = New-Object System.Drawing.Size(78, 18)
+$proxyAuthPassLabel.Text     = "Mot de passe :"
+$proxyAuthPassLabel.Font     = $fontSmall
+$optPanel.Controls.Add($proxyAuthPassLabel)
+
+$proxyAuthPassBox                       = New-Object System.Windows.Forms.TextBox
+$proxyAuthPassBox.Location              = New-Object System.Drawing.Point(314, 362)
+$proxyAuthPassBox.Size                  = New-Object System.Drawing.Size(156, 22)
+$proxyAuthPassBox.Font                  = $fontSmall
+$proxyAuthPassBox.Text                  = ""
+$proxyAuthPassBox.UseSystemPasswordChar = $true
+$optPanel.Controls.Add($proxyAuthPassBox)
+
+$proxyAuthTip = New-Object System.Windows.Forms.ToolTip
+$proxyAuthTip.SetToolTip($proxyAuthUserBox, "Identifiants du proxy, utiles si le test repond 407. Le relais local les transmet au proxy ; le mot de passe n'est jamais enregistre.")
+$proxyAuthTip.SetToolTip($proxyAuthPassBox, "Mot de passe du proxy, garde en memoire pendant le deploiement seulement : a ressaisir a chaque lancement.")
 
 $proxyBypassLabel          = New-Object System.Windows.Forms.Label
 $proxyBypassLabel.Location = New-Object System.Drawing.Point(10, 390)
@@ -1235,6 +1470,10 @@ function Update-ProxyControlState {
     $proxyPortBox.Enabled = $enabled
     $proxyBypassLabel.Enabled = $enabled
     $proxyBypassBox.Enabled = $enabled
+    $proxyAuthUserLabel.Enabled = $enabled
+    $proxyAuthUserBox.Enabled = $enabled
+    $proxyAuthPassLabel.Enabled = $enabled
+    $proxyAuthPassBox.Enabled = $enabled
     $proxyTestBtn.Enabled = $enabled
     if ($null -ne $chkUseDepot) { $chkUseProxy.Enabled = -not $chkUseDepot.Checked }
 }
@@ -1256,12 +1495,28 @@ $proxyTestBtn.Add_Click({
     $lines = @()
     $allOk = $true
     try {
-        foreach ($r in (Test-ProxyReadiness -ProxyHost $h -ProxyPort $p)) {
+        # Identifiants saisis : tester a travers le meme relais que le deploiement.
+        $relaisTest = $null ; $hTest = $h ; $pTest = $p
+        if (-not [string]::IsNullOrWhiteSpace($proxyAuthUserBox.Text.Trim())) {
+            try {
+                $relaisTest = Start-ProxyRelay -UpstreamHost $h -UpstreamPort $p -User $proxyAuthUserBox.Text.Trim() -Password $proxyAuthPassBox.Text
+                $hTest = "127.0.0.1" ; $pTest = $relaisTest.Port
+                $lines += "Relais local 127.0.0.1:$($relaisTest.Port) -> ${h}:${p} (identifiants transmis au proxy)."
+            } catch {
+                $allOk = $false
+                $lines += "Relais local impossible : $($_.Exception.Message)"
+            }
+        }
+        foreach ($r in (Test-ProxyReadiness -ProxyHost $hTest -ProxyPort $pTest)) {
             if (-not $r.OK) { $allOk = $false }
             $mark = if ($r.OK) { "OK " } else { "ERR" }
             $lines += "[$mark] $($r.Name)  -  $($r.Detail)"
             if ($r.Code -eq 407) {
-                $lines += "       -> 407 : le proxy exige une authentification. Le service Click-to-Run (LocalSystem) ne peut pas s'authentifier : utilisez le mode 'Depot de sources'."
+                if ($null -ne $relaisTest) {
+                    $lines += "       -> 407 : identifiants refuses par le proxy. Verifiez l'utilisateur et le mot de passe ci-dessus."
+                } else {
+                    $lines += "       -> 407 : le proxy exige une authentification. Renseignez l'utilisateur et le mot de passe ci-dessus : un relais local les transmet au proxy (le service Click-to-Run ne peut pas s'authentifier lui-meme)."
+                }
             }
         }
     } catch {
@@ -1269,6 +1524,7 @@ $proxyTestBtn.Add_Click({
         $lines += "Erreur du test : $($_.Exception.Message)"
     }
 
+    if ($null -ne $relaisTest) { Stop-ProxyRelay -Relais $relaisTest }
     $form.UseWaitCursor = $false
     $proxyTestBtn.Enabled = $chkUseProxy.Checked
     $proxyTestBtn.Text = "Tester le proxy"
@@ -1628,6 +1884,7 @@ $animTimer.Add_Tick({
             try { $dw.PS.Dispose() } catch {}
             try { $dw.Runspace.Close(); $dw.Runspace.Dispose() } catch {}
             $script:deployWorkerContext = $null
+            Stop-ProxyRelay
         }
     }
 
@@ -2220,6 +2477,9 @@ $script:BgDoWorkHandler = {
                     }
                     if ($okCount -eq 0) {
                         if ($authReq) {
+                            if ($cfg.ProxyRelay) {
+                                throw "Le proxy $($cfg.ProxyRelayTarget) refuse les identifiants fournis (407), malgre le relais local. Verifiez l'utilisateur et le mot de passe du proxy dans Options : le mot de passe n'est jamais enregistre, il faut le ressaisir a chaque lancement. Si le proxy exige NTLM ou Kerberos (et non Basic), le relais ne suffit pas -> utilisez le mode 'Depot de sources'."
+                            }
                             throw "Le proxy ${proxyHost}:${proxyPort} exige une authentification (407). Le service Click-to-Run tourne en LocalSystem et ne peut pas s'authentifier -> utilisez le mode 'Depot de sources' (telechargement une fois, puis installation sur le reseau pedagogique)."
                         }
                         throw "Aucun acces au CDN Microsoft via le proxy ${proxyHost}:${proxyPort}. Verifiez l'adresse, le port, les exceptions, et les regles de filtrage (destination officecdn.microsoft.com:443)."
@@ -2366,7 +2626,9 @@ $script:BgDoWorkHandler = {
                     17002 { "Code 17002 = installation incomplete. Redemarrez le poste et reessayez." }
                     30066 { "Code 30066 = fichiers introuvables. Verifiez le chemin setup.exe." }
                     default {
-                        if ($cfg.ProxyEnabled) {
+                        if ($cfg.ProxyEnabled -and $cfg.ProxyRelay) {
+                            "Le proxy $($cfg.ProxyRelayTarget) n'a pas accepte la connexion malgre le relais local (identifiants refuses ou proxy indisponible). Verifiez l'utilisateur et le mot de passe du proxy dans Options : le mot de passe n'est jamais enregistre. Si le proxy exige NTLM ou Kerberos, le relais (Basic) ne suffit pas : utilisez le mode 'Depot de sources'."
+                        } elseif ($cfg.ProxyEnabled) {
                             "Aucun acces au CDN Microsoft via le proxy $($cfg.ProxyHost):$($cfg.ProxyPort). Verifiez dans Options : adresse et port du proxy, et les exceptions (officecdn.microsoft.com et config.office.com doivent etre autorises en 443). Si le proxy exige une authentification (erreur 407), le telechargement est impossible : le service Click-to-Run tourne en LocalSystem et ne peut pas s'authentifier. Utilisez le mode 'Depot de sources' : telecharger les sources une fois depuis un poste autorise, puis cocher ce mode ici pour installer sans aucun acces Internet."
                         } else {
                             "Aucun acces au CDN Microsoft depuis ce poste. Verifiez le filtrage reseau, ou renseignez le proxy dans Options. Alternative hors ligne : mode 'Depot de sources' (sources telechargees une fois, puis installation et activation KMS sans Internet)."
@@ -2656,6 +2918,7 @@ function Start-Deployment {
         ProxyHost     = $proxyHostBox.Text.Trim()
         ProxyPort     = $proxyPortBox.Text.Trim()
         ProxyBypass   = $proxyBypassBox.Text.Trim()
+        ProxyUser     = $proxyAuthUserBox.Text.Trim()
         DepotEnabled  = $chkUseDepot.Checked
         DepotPath     = $depotPathBox.Text.Trim()
         KmsSecondaryServer = $kmsSecondaryRaw
@@ -2744,6 +3007,24 @@ function Start-Deployment {
         $logBox.AppendText("[$(Get-Date -Format 'HH:mm:ss')]       RunspaceAsync: envoi de la configuration au worker...`n")
         $logBox.ScrollToCaret()
 
+        # Proxy authentifie : relais loopback, seul moyen d'ajouter l'authentification
+        # pour un service LocalSystem. Le mot de passe ne quitte pas la memoire du processus.
+        $proxyHostCfg = $proxyHostBox.Text.Trim()
+        $proxyPortCfg = $proxyPortBox.Text.Trim()
+        $proxyRelayCfg = $false
+        $proxyTargetCfg = "$($proxyHostBox.Text.Trim()):$($proxyPortBox.Text.Trim())"
+        Stop-ProxyRelay
+        if ($chkUseProxy.Checked -and (-not $chkUseDepot.Checked) -and (-not [string]::IsNullOrWhiteSpace($proxyAuthUserBox.Text.Trim()))) {
+            $pRelais = 0
+            if (-not [int]::TryParse($proxyPortCfg, [ref]$pRelais) -or $pRelais -le 0 -or $pRelais -gt 65535) { throw "Port proxy invalide : $proxyPortCfg" }
+            $relais = Start-ProxyRelay -UpstreamHost $proxyHostCfg -UpstreamPort $pRelais -User $proxyAuthUserBox.Text.Trim() -Password $proxyAuthPassBox.Text
+            $proxyHostCfg = "127.0.0.1"
+            $proxyPortCfg = [string]$relais.Port
+            $proxyRelayCfg = $true
+            $logBox.AppendText("[$(Get-Date -Format 'HH:mm:ss')]       Proxy authentifie : relais local 127.0.0.1:$($relais.Port) -> $proxyTargetCfg (mot de passe non enregistre)`n")
+            $logBox.ScrollToCaret()
+        }
+
         $script:LastDeployConfig = [pscustomobject]@{
             SyncHash      = $syncHash
             ActivateOnly  = $ActivateOnly
@@ -2761,8 +3042,10 @@ function Start-Deployment {
             KmsHost       = $kmsAddr.Host
             KmsPort       = $kmsAddr.Port
             ProxyEnabled  = $chkUseProxy.Checked
-            ProxyHost     = $proxyHostBox.Text.Trim()
-            ProxyPort     = $proxyPortBox.Text.Trim()
+            ProxyHost     = $proxyHostCfg
+            ProxyPort     = $proxyPortCfg
+            ProxyRelay    = $proxyRelayCfg
+            ProxyRelayTarget = $proxyTargetCfg
             ProxyBypass   = $proxyBypassBox.Text.Trim()
             DepotEnabled  = $chkUseDepot.Checked
             DepotPath     = $depotPathBox.Text.Trim()
@@ -2828,6 +3111,7 @@ $form.Add_FormClosing({
             "Deploiement en cours", "YesNo", [System.Windows.Forms.MessageBoxIcon]::Warning)
         if ($r -eq "No") { $_.Cancel = $true ; return }
     }
+    Stop-ProxyRelay
     try {
         if ($script:deployWorkerContext) {
             try { $script:deployWorkerContext.PS.Stop() } catch {}
@@ -2867,6 +3151,7 @@ $form.Add_Shown({
         if ($saved.ProxyHost)              { $proxyHostBox.Text = [string]$saved.ProxyHost }
         if ($saved.ProxyPort)              { $proxyPortBox.Text = [string]$saved.ProxyPort }
         if ($saved.ProxyBypass)            { $proxyBypassBox.Text = [string]$saved.ProxyBypass }
+        if ($saved.ProxyUser)              { $proxyAuthUserBox.Text = [string]$saved.ProxyUser }
         if ($null -ne $saved.DepotEnabled) { $chkUseDepot.Checked = [bool]$saved.DepotEnabled }
         if ($saved.DepotPath)              { $depotPathBox.Text = [string]$saved.DepotPath }
         if ($saved.KmsSecondaryServer)     { $kmsSecondaryBox.Text = [string]$saved.KmsSecondaryServer }

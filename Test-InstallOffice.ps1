@@ -57,13 +57,19 @@ function Get-FunctionText {
     param([string[]]$Lines, [string]$Name)
     $start = -1
     for ($i = 0; $i -lt $Lines.Count; $i++) {
-        if ($Lines[$i] -match ('^\s{4}function ' + [regex]::Escape($Name) + ' \{')) { $start = $i ; break }
+        if ($Lines[$i] -match ('^\s*function ' + [regex]::Escape($Name) + ' \{')) { $start = $i ; break }
     }
     if ($start -lt 0) { throw ("fonction " + $Name + " introuvable") }
     $depth = 0
+    $hereString = $false
     for ($i = $start; $i -lt $Lines.Count; $i++) {
-        $depth += ([regex]::Matches($Lines[$i], '\{')).Count
-        $depth -= ([regex]::Matches($Lines[$i], '\}')).Count
+        $ligne = $Lines[$i]
+        # Le code C# embarque (relais proxy) contient des accolades : sans ce saut,
+        # le comptage s'arreterait au milieu du here-string et la fonction serait tronquee.
+        if ($hereString) { if ($ligne -match "^'@") { $hereString = $false } ; continue }
+        if ($ligne -match "@'\s*$") { $hereString = $true ; continue }
+        $depth += ([regex]::Matches($ligne, '\{')).Count
+        $depth -= ([regex]::Matches($ligne, '\}')).Count
         if ($depth -eq 0) { return ($Lines[$start..$i] -join "`n") }
     }
     throw ("fin de " + $Name + " introuvable")
@@ -178,6 +184,12 @@ try {
     $obsoletes = @('bgWorker', 'RunWorkerAsync', 'DEFAULT_XML_PATH', 'proxyUserBox', 'proxyPassBox', 'ProxyPassword')
     $trouves = @($obsoletes | Where-Object { ([regex]::Matches($src, $_)).Count -gt 0 })
     Check "aucun motif obsolete" ($trouves.Count -eq 0) ($trouves -join ", ")
+    Check "proxy authentifie : champs utilisateur et mot de passe" (($src -match '\$proxyAuthUserBox') -and ($src -match '\$proxyAuthPassBox') -and ($src -match 'UseSystemPasswordChar')) "champs d'identifiants absents de l'interface : un proxy qui repond 407 reste alors sans solution"
+    # La config enregistree porte l'utilisateur, jamais le mot de passe : le relais
+    # le garde en memoire, il doit etre ressaisi a chaque lancement.
+    $enregistreUser = ($src -match 'ProxyUser\s+= \$proxyAuthUserBox\.Text\.Trim\(\)')
+    $enregistrePass = [regex]::Matches($src, 'ProxyPass\w*\s*=').Count
+    Check "proxy authentifie : mot de passe jamais enregistre" ($enregistreUser -and ($enregistrePass -eq 0)) ("ProxyUser enregistre=" + $enregistreUser + " affectations de mot de passe=" + $enregistrePass)
 
     # Fins de ligne : l'EXE embarque le script tel qu'il est sur le poste, en
     # CRLF, et le controle compare des octets. Un clone en LF doit donc etre
@@ -233,7 +245,7 @@ try {
         # Autres proprietes du binaire livre : meme commande de compilation que le README.
         $vi = (Get-Item -LiteralPath $exePath).VersionInfo
         $cons = " - RECOMPILER avec Invoke-PS2EXE (README, section Compilation de l EXE)"
-        Check "EXE : version 8.1.0.0" (($vi.FileVersion -eq "8.1.0.0") -and ($vi.ProductVersion -eq "8.1.0.0")) ("FileVersion=" + $vi.FileVersion + " ProductVersion=" + $vi.ProductVersion + " (attendu 8.1.0.0 / -Version)" + $cons)
+        Check "EXE : version 8.2.0.0" (($vi.FileVersion -eq "8.2.0.0") -and ($vi.ProductVersion -eq "8.2.0.0")) ("FileVersion=" + $vi.FileVersion + " ProductVersion=" + $vi.ProductVersion + " (attendu 8.2.0.0 / -Version)" + $cons)
         Check "EXE : titre" ($vi.FileDescription -eq "Deploiement Office 2024") ("FileDescription=" + $vi.FileDescription + " (attendu : Deploiement Office 2024 / -Title)" + $cons)
         Check "EXE : produit et societe" (($vi.ProductName -eq "InstallOffice") -and ($vi.CompanyName -eq "Lycee Loritz")) ("ProductName=" + $vi.ProductName + " CompanyName=" + $vi.CompanyName + " (attendu : InstallOffice / -Product, Lycee Loritz / -Company)" + $cons)
         Check "EXE : OriginalFilename" ($vi.OriginalFilename -eq "Install-Office2024-KMS.exe") ("OriginalFilename=" + $vi.OriginalFilename + " (attendu : Install-Office2024-KMS.exe, donc compiler directement vers ce nom)" + $cons)
@@ -475,6 +487,166 @@ try {
     $netshApres = ((& netsh winhttp show proxy 2>&1) -join " ").Trim()
     $intact = (($regApres.ProxyEnable -eq $regAvant.ProxyEnable) -and ($regApres.ProxyServer -eq $regAvant.ProxyServer) -and ($regApres.ProxyOverride -eq $regAvant.ProxyOverride) -and ($envApres.HTTP_PROXY -eq $envReel.HTTP_PROXY) -and ($envApres.https_proxy -eq $envReel.https_proxy) -and ($netshApres -eq $netshAvant))
     Check "poste reel intact (HKCU, environnement, netsh)" $intact ("regle=" + $regApres.ProxyServer + " env=" + $envApres.HTTP_PROXY + " netsh=" + $netshApres)
+
+    Section "8 bis. Relais proxy authentifie (proxy amont simule)"
+    # Le service Click-to-Run ne peut pas repondre a un 407 : le relais ajoute
+    # l'en-tete Proxy-Authorization et laisse passer le tunnel. On le teste contre
+    # un proxy amont simule qui exige un Basic connu : aucune sortie reseau.
+    $fakeProxyCs = @'
+using System;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+
+public class FakeAuthProxy
+{
+    private readonly string _attendu;
+    private TcpListener _l;
+    private int _port;
+    private int _refus;
+    private int _tunnels;
+
+    public FakeAuthProxy(string user, string password)
+    {
+        _attendu = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(user + ":" + password));
+    }
+
+    public int Port { get { return _port; } }
+    public int Refus { get { return _refus; } }
+    public int Tunnels { get { return _tunnels; } }
+
+    public void Start()
+    {
+        _l = new TcpListener(IPAddress.Loopback, 0);
+        _l.Start();
+        _port = ((IPEndPoint)_l.LocalEndpoint).Port;
+        Thread t = new Thread(Loop);
+        t.IsBackground = true;
+        t.Start();
+    }
+
+    public void Stop()
+    {
+        try { _l.Stop(); } catch { }
+    }
+
+    private void Loop()
+    {
+        while (true)
+        {
+            TcpClient c;
+            try { c = _l.AcceptTcpClient(); } catch { return; }
+            Thread t = new Thread(delegate() { Serve(c); });
+            t.IsBackground = true;
+            t.Start();
+        }
+    }
+
+    private void Serve(TcpClient c)
+    {
+        try
+        {
+            NetworkStream s = c.GetStream();
+            string entete = "";
+            byte[] un = new byte[1];
+            while (entete.Length < 8192)
+            {
+                int n = s.Read(un, 0, 1);
+                if (n <= 0) { break; }
+                entete += (char)un[0];
+                if (entete.EndsWith("\r\n\r\n")) { break; }
+            }
+            bool ok = false;
+            foreach (string ligne in entete.Split('\n'))
+            {
+                if (ligne.Trim().Equals("Proxy-Authorization: " + _attendu, StringComparison.OrdinalIgnoreCase)) { ok = true; }
+            }
+            if (!ok)
+            {
+                Interlocked.Increment(ref _refus);
+                byte[] ko = Encoding.ASCII.GetBytes("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\nContent-Length: 0\r\n\r\n");
+                s.Write(ko, 0, ko.Length);
+                s.Flush();
+                return;
+            }
+            Interlocked.Increment(ref _tunnels);
+            byte[] yy = Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection established\r\n\r\n");
+            s.Write(yy, 0, yy.Length);
+            s.Flush();
+            byte[] tampon = new byte[4096];
+            int m;
+            while ((m = s.Read(tampon, 0, tampon.Length)) > 0)
+            {
+                s.Write(tampon, 0, m);
+                s.Flush();
+            }
+        }
+        catch { }
+        finally { try { c.Close(); } catch { } }
+    }
+}
+'@
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "Start-ProxyRelay")
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "Stop-ProxyRelay")
+    $script:ProxyRelay = $null
+    if (-not ("FakeAuthProxy" -as [type])) { Add-Type -TypeDefinition $fakeProxyCs -Language CSharp }
+
+    function Read-EnteteProxy {
+        param($Flux)
+        $txt = ""
+        $un = New-Object byte[] 1
+        while ($txt.Length -lt 4096) {
+            if ($Flux.Read($un, 0, 1) -le 0) { break }
+            $txt += [char]$un[0]
+            if ($txt.EndsWith("`r`n`r`n")) { break }
+        }
+        return $txt
+    }
+    function Connect-ViaRelais {
+        param([int]$Port, [string]$Cible)
+        $c = New-Object System.Net.Sockets.TcpClient
+        $c.ReceiveTimeout = 8000
+        $c.Connect("127.0.0.1", $Port)
+        $s = $c.GetStream()
+        $req = [System.Text.Encoding]::ASCII.GetBytes("CONNECT $Cible HTTP/1.1`r`nHost: $Cible`r`n`r`n")
+        $s.Write($req, 0, $req.Length) ; $s.Flush()
+        @{ Client = $c ; Stream = $s ; Reponse = (Read-EnteteProxy $s) }
+    }
+
+    $fauxAmont = New-Object FakeAuthProxy -ArgumentList @("eleve", "secret")
+    $fauxAmont.Start()
+    $relais = Start-ProxyRelay -UpstreamHost "127.0.0.1" -UpstreamPort $fauxAmont.Port -User "eleve" -Password "secret"
+    $c1 = Connect-ViaRelais $relais.Port "officecdn.microsoft.com:443"
+    $echange = ""
+    if ($c1.Reponse -match ' 200 ') {
+        $ping = [System.Text.Encoding]::ASCII.GetBytes("ping-relais")
+        $c1.Stream.Write($ping, 0, $ping.Length) ; $c1.Stream.Flush()
+        $buf = New-Object byte[] 64
+        $n = 0
+        try { $n = $c1.Stream.Read($buf, 0, $buf.Length) } catch {}
+        if ($n -gt 0) { $echange = [System.Text.Encoding]::ASCII.GetString($buf, 0, $n) }
+    }
+    Check "relais proxy : CONNECT authentifie et tunnel bidirectionnel" (($c1.Reponse -match ' 200 ') -and ($echange -eq "ping-relais") -and ($fauxAmont.Tunnels -eq 1)) (("reponse=" + ($c1.Reponse -replace "\s+", " ") + " echo=[" + $echange + "] tunnels=" + $fauxAmont.Tunnels))
+    try { $c1.Client.Close() } catch {}
+
+    $relaisKo = Start-ProxyRelay -UpstreamHost "127.0.0.1" -UpstreamPort $fauxAmont.Port -User "eleve" -Password "faux"
+    $c2 = Connect-ViaRelais $relaisKo.Port "officecdn.microsoft.com:443"
+    Check "relais proxy : identifiants refuses (407 relaye)" (($c2.Reponse -match ' 407 ') -and ($relaisKo.Erreurs -ge 1)) (("reponse=" + ($c2.Reponse -replace "\s+", " ") + " erreurs=" + $relaisKo.Erreurs))
+    try { $c2.Client.Close() } catch {}
+
+    $portLibere = $relaisKo.Port
+    Stop-ProxyRelay -Relais $relaisKo
+    Stop-ProxyRelay -Relais $relais
+    $fauxAmont.Stop()
+    $ferme = $false
+    try {
+        $tc = New-Object System.Net.Sockets.TcpClient
+        $tc.Connect("127.0.0.1", $portLibere)
+        $ferme = -not $tc.Connected
+        $tc.Close()
+    } catch { $ferme = $true }
+    Check "relais proxy : arret libere le port d'ecoute" $ferme ("port " + $portLibere + " encore ouvert=" + (-not $ferme))
 
     Section "9. Snapshot du proxy : copie, et echec netsh"
     # 1) l'etat retourne par bg_ApplyProxy doit etre une copie, pas une vue de la machine
