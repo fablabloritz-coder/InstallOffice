@@ -11,7 +11,7 @@ d'un réseau pédagogique.
 | `Install-Office2024-KMS.ps1` | Source de l'interface (v8.1) |
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (83 cas, `-Fast` pour la section 1 seule) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (87 cas, `-Fast` pour la section 1 seule) |
 | `.githooks/pre-commit` | Contrôle rapide de l'index avant chaque commit, refuse l'EXE désynchronisé |
 | `.github/workflows/controle-exe.yml` | Suite complète + contrat de fins de ligne (checkout sans conversion) sur GitHub Actions, à chaque push sur `main` et à chaque pull request |
 | `setup.exe` | Office Deployment Tool — **non versionné**, à récupérer (voir ci-dessous) |
@@ -59,9 +59,11 @@ pointé sur ce relais, qui n'est pour Office qu'un proxy ordinaire. Le relais ne
 temps du déploiement et le mot de passe n'est **jamais** écrit sur disque : il faut le
 ressaisir à chaque lancement. Seule l'authentification **Basic** est prise en charge ; un
 proxy qui n'accepte que NTLM ou Kerberos reste hors de portée, d'où le mode « Dépôt de
-sources ». Si le programme est tué pendant le téléchargement, avant la restauration, le
-poste garderait un proxy WinHTTP pointant sur un port mort : `netsh winhttp reset proxy`
-le remet en accès direct (une fermeture normale restaure tout toute seule).
+sources ». Si le programme est tué pendant le téléchargement, avant la restauration, le poste
+garderait un proxy WinHTTP pointant sur un port mort. Au démarrage suivant, ce reliquat
+est détecté — une adresse loopback dont le port ne répond plus — et la remise en accès
+direct (`netsh winhttp reset proxy`) est proposée, la décision étant écrite dans le
+journal ; une fermeture normale restaure tout toute seule.
 
 ## Compilation de l'EXE
 
@@ -98,7 +100,7 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps
 
 `-Fast` ne joue que la section 1 — syntaxe du script, empreinte du script embarqué et
 propriétés de l'EXE — soit quelques secondes : c'est exactement ce que lance le hook avant
-chaque commit. Sans commutateur, la suite complète (83 cas) tourne, comme sur GitHub.
+chaque commit. Sans commutateur, la suite complète (87 cas) tourne, comme sur GitHub.
 
 Le **dernier contrôle** de la suite relit ce README, y cherche toutes les mentions
 « N cas » et exige qu'elles valent le total réellement exécuté : un cas ajouté ou retiré
@@ -145,7 +147,10 @@ passer les données dans les deux sens, un mauvais mot de passe doit rendre `407
 couvert de la même façon : face à un proxy qui répond `407`, le worker produit le
 message des identifiants quand la configuration porte `ProxyRelay`, le message
 historique (`LocalSystem`) sinon, et dans les deux cas sans appliquer de proxy à la
-machine.
+machine. Le reliquat d'un arrêt brutal est couvert de la même façon : WinHTTP pointé sur
+un port loopback fermé est détecté, un relais encore vivant ou un accès direct ne sont
+pas signalés, et la remise en accès direct n'est annoncée réussie que si `netsh`
+confirme (un échec est remonté tel quel).
 
 Comment : un faux `setup.exe` est compilé dans `%TEMP%` (il enregistre ses arguments et
 renvoie le code voulu) et un `ospp.vbs` factice remplace celui d'Office ; aucun
@@ -178,7 +183,7 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   ralenti ; `git commit --no-verify` reste possible pour un cas exceptionnel, et se voit
   dans l'historique.
 - **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la suite
-  **complète** (83 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
+  **complète** (87 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
   request : un EXE oublié ou compilé autrement fait échouer la vérification côté serveur,
   même si le hook local n'était pas installé — et sans rien imposer à la boucle locale.
 - **le contrat de fins de ligne y est vérifié aussi** : un second job refait un checkout

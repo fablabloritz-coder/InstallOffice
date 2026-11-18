@@ -267,6 +267,44 @@ function Test-ProxyReadiness {
     return $out
 }
 
+# --- Reliquat d'un relais : WinHTTP sur un port mort ------------------------
+#  Un arret brutal pendant le telechargement laisse la configuration WinHTTP de
+#  la machine sur le relais loopback du programme, alors que ce relais a disparu
+#  avec le processus : Windows et Office n'ont plus d'acces reseau tant que
+#  personne ne s'en apercoit. On detecte ce cas au demarrage et on propose la
+#  remise en acces direct (netsh winhttp reset proxy).
+function Get-ProxyRelaySink {
+    @{ Show  = { @(& netsh winhttp show proxy 2>&1) -join "`n" }
+       Reset = { @(& netsh winhttp reset proxy 2>&1) -join "`n" } }
+}
+
+function Get-WinHttpProxyAddress {
+    param($Sink)
+    if ($null -eq $Sink) { $Sink = Get-ProxyRelaySink }
+    # Premiere adresse loopback:port de la sortie : la liste d'exceptions vient
+    # apres le serveur et ne doit pas etre prise pour le proxy.
+    $m = [regex]::Match([string](& $Sink.Show), '(?i)(127\.0\.0\.1|localhost)\s*:\s*(\d{1,5})')
+    if ($m.Success) { return @{ Host = $m.Groups[1].Value ; Port = [int]$m.Groups[2].Value } }
+    return $null
+}
+
+function Test-ProxyRelayResidue {
+    param($Sink, [int]$TimeoutMs = 1500)
+    if ($null -eq $Sink) { $Sink = Get-ProxyRelaySink }
+    $addr = Get-WinHttpProxyAddress -Sink $Sink
+    if ($null -eq $addr) { return @{ Found = $false ; Host = "" ; Port = 0 ; Alive = $false } }
+    $alive = Test-TcpPort -Server $addr.Host -Port $addr.Port -TimeoutMs $TimeoutMs
+    @{ Found = (-not $alive) ; Host = $addr.Host ; Port = $addr.Port ; Alive = $alive }
+}
+
+function Reset-WinHttpProxyResidue {
+    param($Sink)
+    if ($null -eq $Sink) { $Sink = Get-ProxyRelaySink }
+    $detail = [string](& $Sink.Reset)
+    # Succes = plus aucune adresse loopback dans la configuration WinHTTP.
+    @{ OK = ($null -eq (Get-WinHttpProxyAddress -Sink $Sink)) ; Detail = $detail.Trim() }
+}
+
 # --- Relais proxy local avec authentification (loopback) -------------------
 #  Le service Click-to-Run tourne en LocalSystem : il ne peut pas repondre a un
 #  challenge 407. Ce relais ecoute sur la loopback, ajoute l'en-tete
@@ -3082,6 +3120,21 @@ $form.Add_FormClosing({
 #  INITIALISATION POST-AFFICHAGE
 # ================================================================
 $form.Add_Shown({
+    # Reliquat d'un deploiement interrompu : WinHTTP peut pointer sur le relais
+    # loopback du programme, mort avec le processus. On le propose avant tout.
+    try {
+        $residu = Test-ProxyRelayResidue
+        if ($residu.Found) {
+            $txt = "La configuration proxy de Windows pointe vers $($residu.Host):$($residu.Port), un relais local qui ne repond plus.`n`nC'est le residu d'un deploiement interrompu : tant qu'il reste la, Windows et Office n'ont plus d'acces direct a Internet.`n`nRemettre Windows en acces direct (netsh winhttp reset proxy) ?"
+            if ([System.Windows.Forms.MessageBox]::Show($txt, "Reliquat de proxy", "YesNo", [System.Windows.Forms.MessageBoxIcon]::Warning) -eq "Yes") {
+                $fix = Reset-WinHttpProxyResidue
+                $ligne = if ($fix.OK) { "Reliquat supprime : Windows est de nouveau en acces direct." } else { "Remise en acces direct impossible : $($fix.Detail)" }
+            } else {
+                $ligne = "Reliquat conserve : proxy WinHTTP $($residu.Host):$($residu.Port) (port mort)."
+            }
+            $logBox.AppendText("[$(Get-Date -Format 'HH:mm:ss')]       $ligne`n") ; $logBox.ScrollToCaret()
+        }
+    } catch {}
     Update-PreChecks | Out-Null
 
     # Restaurer la config sauvegardee

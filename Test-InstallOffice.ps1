@@ -671,6 +671,47 @@ public class FakeAuthProxy
     Check "relais deploye : sans ProxyRelay, message historique (LocalSystem)" (($r2.Sync.StepState[2] -eq "error") -and ($t2 -match 'exige une authentification \(407\)') -and ($t2 -match 'LocalSystem') -and ($t2 -notmatch 'refuse les identifiants fournis')) (Solution $r2)
     $faux407.Stop()
 
+    Section "8 ter. Reliquat de relais au demarrage"
+    # Un arret brutal laisse WinHTTP sur le relais loopback, port mort. On extrait
+    # les fonctions telles quelles : seul leur acces a netsh (Get-ProxyRelaySink)
+    # est remplace, et le test de port reste un vrai test de port sur la loopback.
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "Test-TcpPort")
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "Get-ProxyRelaySink")
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "Get-WinHttpProxyAddress")
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "Test-ProxyRelayResidue")
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "Reset-WinHttpProxyResidue")
+
+    # Port libre releve puis referme : signature exacte d'un relais mort.
+    $sonde = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    $sonde.Start()
+    $portMort = $sonde.LocalEndpoint.Port
+    $sonde.Stop()
+    $sinkMort = @{ Show = { "Proxy Server(s) :  127.0.0.1:$portMort" } ; Reset = { "reinitialise" } }
+    $resMort = Test-ProxyRelayResidue -Sink $sinkMort -TimeoutMs 800
+    Check "reliquat proxy : relais loopback mort detecte" ($resMort.Found -and ($resMort.Host -eq "127.0.0.1") -and ($resMort.Port -eq $portMort)) ("found=" + $resMort.Found + " host=" + $resMort.Host + " port=" + $resMort.Port + " attendu=" + $portMort)
+
+    # Relais vivant ou acces direct : aucun signalement (pas de faux positif).
+    $vivant = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    $vivant.Start()
+    $portVivant = $vivant.LocalEndpoint.Port
+    $sinkVivant = @{ Show = { "Proxy Server(s) :  127.0.0.1:$portVivant" } ; Reset = { "" } }
+    $resVivant = Test-ProxyRelayResidue -Sink $sinkVivant -TimeoutMs 800
+    $vivant.Stop()
+    $sinkDirect = @{ Show = { "Acces direct (pas de serveur proxy)." } ; Reset = { "" } }
+    $resDirect = Test-ProxyRelayResidue -Sink $sinkDirect -TimeoutMs 500
+    Check "reliquat proxy : relais vivant ou acces direct non signale" ((-not $resVivant.Found) -and (-not $resDirect.Found)) ("vivant=" + $portVivant + " -> " + $resVivant.Found + " | direct -> " + $resDirect.Found)
+
+    # Noms propres a cette section : la section 9 reutilise $etat et $etatKo.
+    $etatReinit = @{ Show = "Proxy Server(s) :  127.0.0.1:$portMort" }
+    $sinkReinit = @{ Show = { $etatReinit.Show } ; Reset = { $etatReinit.Show = "Acces direct (pas de serveur proxy)." ; "Proxy reinitialise." } }
+    $fixReinit = Reset-WinHttpProxyResidue -Sink $sinkReinit
+    Check "reliquat proxy : remise en acces direct confirmee" ($fixReinit.OK -and ($etatReinit.Show -match 'Acces direct')) ("ok=" + $fixReinit.OK + " config=[" + $etatReinit.Show + "] detail=[" + $fixReinit.Detail + "]")
+
+    $etatReinitKo = @{ Show = "Proxy Server(s) :  127.0.0.1:$portMort" }
+    $sinkReinitKo = @{ Show = { $etatReinitKo.Show } ; Reset = { "acces refuse" } }
+    $fixReinitKo = Reset-WinHttpProxyResidue -Sink $sinkReinitKo
+    Check "reliquat proxy : echec de la remise en direct signale" ((-not $fixReinitKo.OK) -and ($fixReinitKo.Detail -match 'acces refuse')) ("ok=" + $fixReinitKo.OK + " detail=[" + $fixReinitKo.Detail + "]")
+
     Section "9. Snapshot du proxy : copie, et echec netsh"
     # 1) l'etat retourne par bg_ApplyProxy doit etre une copie, pas une vue de la machine
     $machine.WinInet.ProxyEnable = 42
