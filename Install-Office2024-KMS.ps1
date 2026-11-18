@@ -281,6 +281,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 public class OfficeProxyRelay
 {
@@ -293,22 +294,17 @@ public class OfficeProxyRelay
     private int _port;
     private int _tunnels;
     private int _erreurs;
-    private string _derniereErreur = "";
 
     public OfficeProxyRelay(string upstreamHost, int upstreamPort, string user, string password)
     {
         _upHost = upstreamHost;
         _upPort = upstreamPort;
-        if (!string.IsNullOrEmpty(user))
-        {
-            _auth = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(user + ":" + password));
-        }
+        if (!string.IsNullOrEmpty(user)) { _auth = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(user + ":" + password)); }
     }
 
     public int Port { get { return _port; } }
     public int Tunnels { get { return _tunnels; } }
     public int Erreurs { get { return _erreurs; } }
-    public string DerniereErreur { get { return _derniereErreur; } }
 
     public void Start()
     {
@@ -323,8 +319,8 @@ public class OfficeProxyRelay
     public void Stop()
     {
         _stopping = true;
-        try { if (_listener != null) { _listener.Stop(); } } catch { }
-        try { if (_accept != null) { _accept.Join(2000); } } catch { }
+        try { _listener.Stop(); } catch { }
+        try { _accept.Join(2000); } catch { }
     }
 
     private void AcceptLoop()
@@ -332,43 +328,30 @@ public class OfficeProxyRelay
         while (!_stopping)
         {
             TcpClient client;
-            try { client = _listener.AcceptTcpClient(); }
-            catch { return; }
+            try { client = _listener.AcceptTcpClient(); } catch { return; }
             Thread t = new Thread(delegate() { Serve(client); });
             t.IsBackground = true;
             t.Start();
         }
     }
 
+    // Le CDN Office est en HTTPS : chaque connexion commence par un CONNECT, dont
+    // la cible est relayee telle quelle, authentification en plus.
     private void Serve(TcpClient client)
     {
         TcpClient up = null;
         try
         {
-            client.NoDelay = true;
             NetworkStream cs = client.GetStream();
-            string entete = LireEntete(cs);
-            string[] lignes = entete.Split(new string[] { "\r\n" }, StringSplitOptions.None);
-            string requete = lignes.Length > 0 ? lignes[0] : "";
-            string[] parts = requete.Split(' ');
-            if (parts.Length < 2 || !parts[0].Equals("CONNECT", StringComparison.OrdinalIgnoreCase))
-            {
-                Signaler("methode non tunnelisable : " + requete);
-                Ecrire(cs, "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n");
-                return;
-            }
-            string cible = parts[1];
+            string[] parts = LireEntete(cs).Split(' ');
+            string cible = parts.Length > 1 ? parts[1] : "";
             up = new TcpClient();
-            up.NoDelay = true;
             up.Connect(_upHost, _upPort);
             NetworkStream us = up.GetStream();
-            StringBuilder r = new StringBuilder();
-            r.Append("CONNECT " + cible + " HTTP/1.1\r\n");
-            r.Append("Host: " + cible + "\r\n");
-            r.Append("User-Agent: InstallOffice2024\r\n");
-            if (_auth != null) { r.Append("Proxy-Authorization: " + _auth + "\r\n"); }
-            r.Append("\r\n");
-            byte[] rb = Encoding.ASCII.GetBytes(r.ToString());
+            string req = "CONNECT " + cible + " HTTP/1.1\r\nHost: " + cible + "\r\n";
+            if (_auth != null) { req += "Proxy-Authorization: " + _auth + "\r\n"; }
+            req += "\r\n";
+            byte[] rb = Encoding.ASCII.GetBytes(req);
             us.Write(rb, 0, rb.Length);
             us.Flush();
 
@@ -378,48 +361,21 @@ public class OfficeProxyRelay
             if (sp > 0 && reponse.Length >= sp + 4) { int.TryParse(reponse.Substring(sp + 1, 3), out code); }
             if (code < 200 || code > 299)
             {
-                Signaler("proxy amont : " + reponse.Replace("\r\n", " ").Trim());
+                Interlocked.Increment(ref _erreurs);
                 Ecrire(cs, reponse);
                 return;
             }
             Interlocked.Increment(ref _tunnels);
             Ecrire(cs, "HTTP/1.1 200 Connection established\r\n\r\n");
-            Tunnel(cs, us);
+            // Deux copies asynchrones suffisent : aucune necessite de thread dedie.
+            Task t = cs.CopyToAsync(us);
+            Task.WaitAny(t, us.CopyToAsync(cs));
         }
-        catch (Exception ex) { Signaler(ex.Message); }
+        catch { Interlocked.Increment(ref _erreurs); }
         finally
         {
             try { if (up != null) { up.Close(); } } catch { }
             try { client.Close(); } catch { }
-        }
-    }
-
-    private static void Tunnel(NetworkStream a, NetworkStream b)
-    {
-        Thread t = new Thread(delegate() { Pomper(a, b); });
-        t.IsBackground = true;
-        t.Start();
-        Pomper(b, a);
-        try { t.Join(2000); } catch { }
-    }
-
-    private static void Pomper(NetworkStream de, NetworkStream vers)
-    {
-        byte[] tampon = new byte[32768];
-        try
-        {
-            int n;
-            while ((n = de.Read(tampon, 0, tampon.Length)) > 0)
-            {
-                vers.Write(tampon, 0, n);
-                vers.Flush();
-            }
-        }
-        catch { }
-        finally
-        {
-            try { de.Close(); } catch { }
-            try { vers.Close(); } catch { }
         }
     }
 
@@ -429,11 +385,9 @@ public class OfficeProxyRelay
         byte[] un = new byte[1];
         while (sb.Length < 16384)
         {
-            int n = s.Read(un, 0, 1);
-            if (n <= 0) { break; }
+            if (s.Read(un, 0, 1) <= 0) { break; }
             sb.Append((char)un[0]);
-            if (sb.Length >= 4 && sb[sb.Length - 1] == '\n' && sb[sb.Length - 2] == '\r' && sb[sb.Length - 3] == '\n' && sb[sb.Length - 4] == '\r') { break; }
-            if (sb.Length >= 2 && sb[sb.Length - 1] == '\n' && sb[sb.Length - 2] == '\n') { break; }
+            if (sb.Length >= 4 && sb[sb.Length - 1] == '\n' && sb[sb.Length - 3] == '\n') { break; }
         }
         return sb.ToString();
     }
@@ -447,12 +401,6 @@ public class OfficeProxyRelay
             s.Flush();
         }
         catch { }
-    }
-
-    private void Signaler(string message)
-    {
-        _derniereErreur = message;
-        Interlocked.Increment(ref _erreurs);
     }
 }
 '@
@@ -471,6 +419,17 @@ function Stop-ProxyRelay {
         if ($null -ne $r) { try { $r.Stop() } catch {} }
     }
     $script:ProxyRelay = $null
+}
+
+# --- Proxy effectif : direct, ou via le relais d'authentification -----------
+#  Un seul point de passage : le bouton "Tester le proxy" et le deploiement
+#  partagent exactement la meme mise en place.
+function Start-AuthenticatedProxy {
+    param([string]$ProxyHost, [string]$ProxyPort, [string]$User, [string]$Password)
+    $port = 0
+    if (-not [int]::TryParse($ProxyPort, [ref]$port) -or $port -le 0 -or $port -gt 65535) { throw "Port proxy invalide : $ProxyPort" }
+    $relais = Start-ProxyRelay -UpstreamHost $ProxyHost -UpstreamPort $port -User $User -Password $Password
+    @{ Relay = $relais ; Host = "127.0.0.1" ; Port = [string]$relais.Port ; Target = "${ProxyHost}:${port}" }
 }
 
 # --- Genere le contenu XML ODT selon les exclusions ---
@@ -1499,9 +1458,9 @@ $proxyTestBtn.Add_Click({
         $relaisTest = $null ; $hTest = $h ; $pTest = $p
         if (-not [string]::IsNullOrWhiteSpace($proxyAuthUserBox.Text.Trim())) {
             try {
-                $relaisTest = Start-ProxyRelay -UpstreamHost $h -UpstreamPort $p -User $proxyAuthUserBox.Text.Trim() -Password $proxyAuthPassBox.Text
-                $hTest = "127.0.0.1" ; $pTest = $relaisTest.Port
-                $lines += "Relais local 127.0.0.1:$($relaisTest.Port) -> ${h}:${p} (identifiants transmis au proxy)."
+                $via = Start-AuthenticatedProxy -ProxyHost $h -ProxyPort $p -User $proxyAuthUserBox.Text.Trim() -Password $proxyAuthPassBox.Text
+                $relaisTest = $via.Relay ; $hTest = $via.Host ; $pTest = $via.Port
+                $lines += "Relais local $($via.Host):$($via.Port) -> $($via.Target) (identifiants transmis au proxy)."
             } catch {
                 $allOk = $false
                 $lines += "Relais local impossible : $($_.Exception.Message)"
@@ -3012,16 +2971,12 @@ function Start-Deployment {
         $proxyHostCfg = $proxyHostBox.Text.Trim()
         $proxyPortCfg = $proxyPortBox.Text.Trim()
         $proxyRelayCfg = $false
-        $proxyTargetCfg = "$($proxyHostBox.Text.Trim()):$($proxyPortBox.Text.Trim())"
+        $proxyTargetCfg = ""
         Stop-ProxyRelay
         if ($chkUseProxy.Checked -and (-not $chkUseDepot.Checked) -and (-not [string]::IsNullOrWhiteSpace($proxyAuthUserBox.Text.Trim()))) {
-            $pRelais = 0
-            if (-not [int]::TryParse($proxyPortCfg, [ref]$pRelais) -or $pRelais -le 0 -or $pRelais -gt 65535) { throw "Port proxy invalide : $proxyPortCfg" }
-            $relais = Start-ProxyRelay -UpstreamHost $proxyHostCfg -UpstreamPort $pRelais -User $proxyAuthUserBox.Text.Trim() -Password $proxyAuthPassBox.Text
-            $proxyHostCfg = "127.0.0.1"
-            $proxyPortCfg = [string]$relais.Port
-            $proxyRelayCfg = $true
-            $logBox.AppendText("[$(Get-Date -Format 'HH:mm:ss')]       Proxy authentifie : relais local 127.0.0.1:$($relais.Port) -> $proxyTargetCfg (mot de passe non enregistre)`n")
+            $via = Start-AuthenticatedProxy -ProxyHost $proxyHostCfg -ProxyPort $proxyPortCfg -User $proxyAuthUserBox.Text.Trim() -Password $proxyAuthPassBox.Text
+            $proxyHostCfg = $via.Host ; $proxyPortCfg = $via.Port ; $proxyRelayCfg = $true ; $proxyTargetCfg = $via.Target
+            $logBox.AppendText("[$(Get-Date -Format 'HH:mm:ss')]       Proxy authentifie : relais local $($via.Host):$($via.Port) -> $proxyTargetCfg (mot de passe non enregistre)`n")
             $logBox.ScrollToCaret()
         }
 
