@@ -15,8 +15,15 @@
 
     Usage :
       powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps1
+      powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps1 -Fast
+
+    -Fast : section 1 seulement (syntaxe du script, empreinte et proprietes de
+    l'EXE), quelques secondes. C'est le controle du hook pre-commit ; sans ce
+    commutateur la suite complete tourne, comme sur GitHub.
     Code de sortie : 0 si tous les controles passent, 1 sinon.
 #>
+
+param([switch]$Fast)
 
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Drawing | Out-Null
@@ -128,6 +135,7 @@ function Solution { param($Res) (@($Res.Logs) | Where-Object { $_ -match 'Soluti
 # ---------------------------------------------------------------- execution
 if (-not (Test-Path $MainScript)) { Write-Host ("Script principal introuvable : " + $MainScript) ; exit 2 }
 New-Item -ItemType Directory -Path $Work -Force | Out-Null
+if ($Fast) { Write-Host "Mode rapide : section 1 seulement (script et proprietes de l'EXE)." }
 
 try {
     $src   = [System.IO.File]::ReadAllText($MainScript)
@@ -184,6 +192,19 @@ try {
         $asciiExe = [System.Text.Encoding]::ASCII.GetString($exeBytes)
         $niveau = if ($asciiExe -match 'requestedExecutionLevel[^>]*level\s*=\s*"(?<lvl>[A-Za-z]+)"') { $matches["lvl"] } else { "(absent)" }
         Check "EXE : manifeste requireAdmin" ($niveau -eq "requireAdministrator") ("requestedExecutionLevel=" + $niveau + " (attendu requireAdministrator / -RequireAdmin)" + $cons)
+    }
+
+    # Mode rapide : le hook pre-commit ne doit pas couter la suite entiere.
+    # La section 1 est justement ce qui decide si l'EXE livre est a jour.
+    if ($Fast) {
+        Write-Host ""
+        $totalRapide = $Pass + $Fail
+        if ($Fail -eq 0) {
+            Write-Host ("RESULTAT (rapide) : " + $Pass + "/" + $totalRapide + " controles passes.") -ForegroundColor Green
+            exit 0
+        }
+        Write-Host ("RESULTAT (rapide) : " + $Fail + " echec(s) sur " + $totalRapide + " controles.") -ForegroundColor Red
+        exit 1
     }
 
     # fixtures communes
@@ -459,6 +480,17 @@ try {
         Write-Host "  (suite lancee par le hook : section 10 ignoree pour ne pas recurser)"
     }
     else {
+        # Le hook doit rester rapide : verifier que le mode -Fast existe, qu'il
+        # passe sur l'arbre courant et qu'il s'arrete avant les sections lourdes.
+        $eapRapide = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $sortieRapide = (& powershell -NoProfile -STA -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-InstallOffice.ps1") -Fast 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+        $codeRapide = $LASTEXITCODE
+        $ErrorActionPreference = $eapRapide
+        $rapideCourt = ($sortieRapide -replace "\s+", " ").Trim()
+        Check "hook : mode rapide -Fast operationnel" (($codeRapide -eq 0) -and $sortieRapide.Contains("RESULTAT (rapide)")) ("code=" + $codeRapide + " sortie=" + $rapideCourt)
+        Check "hook : mode rapide limite a la section 1" (($sortieRapide.Contains("=== 1. Script principal ===")) -and (-not $sortieRapide.Contains("=== 2. SourcePath"))) $rapideCourt
+
         $depot = Join-Path $Work "hookrepo"
         $avantTest = $env:INSTALLOFFICE_HOOKTEST
         New-Item -ItemType Directory -Path $depot -Force | Out-Null

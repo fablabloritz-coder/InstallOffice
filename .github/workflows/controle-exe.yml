@@ -1,7 +1,8 @@
 name: Controle de l'EXE livre
 
-# Meme controle que le hook pre-commit, mais cote serveur : un push direct sur
-# main ou une pull request dont l'EXE ne correspond plus au script echoue ici.
+# Suite COMPLETE, cote serveur : le hook local ne fait qu'un controle rapide
+# (-Fast, section 1) pour rester utilisable. Ici, un push direct sur main ou une
+# pull request dont l'EXE ne correspond plus au script echoue sur les 69 cas.
 on:
   push:
     branches: [main]
@@ -24,7 +25,7 @@ jobs:
         shell: powershell
         run: $PSVersionTable.PSVersion.ToString()
 
-      - name: Controles hors ligne (empreinte, proprietes de l'EXE, scenarios)
+      - name: Suite complete (empreinte, proprietes de l'EXE, scenarios, hook)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Continue'

@@ -11,8 +11,8 @@ d'un réseau pédagogique.
 | `Install-Office2024-KMS.ps1` | Source de l'interface (v8.1) |
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (67 cas) |
-| `.githooks/pre-commit` | Refuse le commit si l'EXE livré ne passe plus ces contrôles |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (69 cas, `-Fast` pour la section 1 seule) |
+| `.githooks/pre-commit` | Contrôle rapide de l'index avant chaque commit, refuse l'EXE désynchronisé |
 | `.github/workflows/controle-exe.yml` | Même contrôle sur GitHub Actions (push sur `main`, pull request) |
 | `setup.exe` | Office Deployment Tool — **non versionné**, à récupérer (voir ci-dessous) |
 
@@ -82,7 +82,12 @@ renommer laisse `_b.exe` dans les propriétés).
 
 ```powershell
 powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps1
+powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps1 -Fast
 ```
+
+`-Fast` ne joue que la section 1 — syntaxe du script, empreinte du script embarqué et
+propriétés de l'EXE — soit quelques secondes : c'est exactement ce que lance le hook avant
+chaque commit. Sans commutateur, la suite complète (69 cas) tourne, comme sur GitHub.
 
 Vérifie d'abord que l'EXE distribué correspond au script : l'empreinte SHA-256 du script
 embarqué dans le binaire doit être celle du `.ps1`, sinon le contrôle s'arrête avec un
@@ -118,14 +123,17 @@ téléchargement, aucune modification du poste. Code de sortie `0` si tout passe
 
 Le contrôle ne dépend pas de la mémoire de celui qui commite :
 
-- **avant chaque commit**, le hook `.githooks/pre-commit` lance la suite dès que
+- **avant chaque commit**, le hook `.githooks/pre-commit` lance le contrôle **rapide**
+  (`-Fast`, section 1 seule, quelques secondes) dès que
   `Install-Office2024-KMS.ps1`, `Install-Office2024-KMS.exe` ou `Test-InstallOffice.ps1`
-  est dans le commit, et refuse le commit si elle échoue (les échecs sont affichés, pas
-  avalés). Il ne lit pas l'arbre de travail : l'index est exporté par
+  est dans le commit, et refuse le commit s'il échoue (les échecs sont affichés, pas
+  avalés). Un commit ne coûte donc pas la suite entière : rejouer 150 s à chaque fois
+  poussait à `--no-verify`, ce qui revenait à ne rien contrôler du tout. Il ne lit pas l'arbre de travail : l'index est exporté par
   `git checkout-index` dans un dossier temporaire et la suite y tourne sur le contenu
   **tel qu'il sera commité** — une modification non indexée ne peut donc ni masquer une
   dérive, ni en créer une. La section 10 de la suite le prouve en faisant diverger index
-  et arbre de travail dans un dépôt jetable. Il s'active une fois par clone :
+  et arbre de travail dans un dépôt jetable, et vérifie que le hook reste bien en mode
+  rapide. Il s'active une fois par clone :
 
   ```powershell
   git config core.hooksPath .githooks
@@ -134,10 +142,10 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   Un commit qui ne touche aucun de ces trois fichiers (README, XML, workflow) n'est pas
   ralenti ; `git commit --no-verify` reste possible pour un cas exceptionnel, et se voit
   dans l'historique.
-- **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la même suite sur
-  `windows-latest` à chaque push sur `main` et à chaque pull request : un EXE oublié ou
-  compilé autrement fait échouer la vérification côté serveur, même si le hook local
-  n'était pas installé.
+- **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la suite
+  **complète** (69 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
+  request : un EXE oublié ou compilé autrement fait échouer la vérification côté serveur,
+  même si le hook local n'était pas installé — et sans rien imposer à la boucle locale.
 
 ## Limites connues
 

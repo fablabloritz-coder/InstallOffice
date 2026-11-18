@@ -1,11 +1,18 @@
 #!/bin/sh
-# Controle automatique avant chaque commit : l'EXE livre doit rester aligne sur
-# le script (empreinte du script embarque) et sur ses proprietes de compilation.
+# Controle avant chaque commit : l'EXE livre doit rester aligne sur le script
+# (empreinte du script embarque) et sur ses proprietes de compilation.
 #
 # Ce qui est controle est l'INDEX, pas l'arbre de travail : c'est l'index qui
 # part dans le commit. Les fichiers versionnes y sont donc exportes dans un
 # dossier temporaire, et Test-InstallOffice.ps1 y tourne tel qu'il sera commite.
 # Une modification non indexee ne peut donc ni masquer une derive, ni en creer une.
+#
+# Le hook ne lance que le controle rapide (Test-InstallOffice.ps1 -Fast : section 1,
+# syntaxe du script + empreinte et proprietes de l'EXE), quelques secondes, pour
+# qu'un commit normal ne donne pas envie de le contourner. La suite complete
+# (scenarios ODT, KMS, proxy, section 10 sur l'index) tourne sur GitHub, dans
+# .github/workflows/controle-exe.yml, et reste lancable a la main :
+#   powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps1
 #
 # Activation, une fois par clone :
 #   git config core.hooksPath .githooks
@@ -31,7 +38,7 @@ if ! command -v powershell >/dev/null 2>&1; then
     exit 0
 fi
 
-echo "pre-commit: controle de l'EXE tel qu'il sera commite (index)..."
+echo "pre-commit: controle rapide de l'EXE tel qu'il sera commite (index)..."
 exportement=$(mktemp -d 2>/dev/null) || {
     echo "pre-commit: dossier temporaire indisponible - commit refuse." >&2
     exit 1
@@ -44,21 +51,24 @@ if ! git checkout-index --all --prefix="$exportement/" >/dev/null 2>&1; then
     exit 1
 fi
 
-powershell -NoProfile -STA -ExecutionPolicy Bypass -File "$exportement/Test-InstallOffice.ps1" >"$journal" 2>&1
+# -Fast : section 1 seulement (script + proprietes de l'EXE), quelques secondes.
+# La suite complete est celle que rejoue le workflow GitHub.
+powershell -NoProfile -STA -ExecutionPolicy Bypass -File "$exportement/Test-InstallOffice.ps1" -Fast >"$journal" 2>&1
 code=$?
 rm -rf "$exportement"
 
 if [ "$code" -ne 0 ]; then
-    echo "pre-commit: ECHEC du controle de l'index (code $code) - commit refuse." >&2
+    echo "pre-commit: ECHEC du controle rapide de l'index (code $code) - commit refuse." >&2
     echo "--- echecs ---" >&2
     grep -E "ECHEC|RESULTAT" "$journal" | head -20 >&2
     echo "--- fin ---" >&2
-    echo "Detail complet :" >&2
+    echo "Corriger, regarder les sections suivantes si besoin :" >&2
     echo "  powershell -NoProfile -STA -ExecutionPolicy Bypass -File ./Test-InstallOffice.ps1" >&2
+    echo "La suite complete tourne aussi sur GitHub a chaque push." >&2
     echo "Pour forcer malgre tout (deconseille) : git commit --no-verify" >&2
     rm -f "$journal"
     exit 1
 fi
 rm -f "$journal"
-echo "pre-commit: OK - l'index contient un EXE aligne sur son script."
+echo "pre-commit: OK - l'index contient un EXE aligne sur son script (controle rapide)."
 exit 0
