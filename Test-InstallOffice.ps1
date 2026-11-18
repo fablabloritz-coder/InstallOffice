@@ -589,6 +589,20 @@ finally {
 }
 
 Write-Host ""
+# Dernier controle : le nombre de cas annonce dans le README doit etre exactement
+# celui qui vient d'etre joue. Ce chiffre a deja derive trois fois (60, 67, 69) :
+# un cas ajoute sans mettre la documentation a jour echoue desormais tout seul.
+$totalVise = $Pass + $Fail + 1   # ce controle compte lui aussi
+$readme = Join-Path $PSScriptRoot "README.md"
+$annonces = @()
+if (Test-Path -LiteralPath $readme) {
+    foreach ($ligneReadme in [System.IO.File]::ReadAllLines($readme)) {
+        foreach ($m in [regex]::Matches($ligneReadme, '(\d+)\s+cas')) { $annonces += [int]$m.Groups[1].Value }
+    }
+}
+$ecarts = @($annonces | Where-Object { $_ -ne $totalVise })
+Check "README : nombre de cas annonce = total reellement execute" (($annonces.Count -gt 0) -and ($ecarts.Count -eq 0)) ("README annonce=" + (($annonces | Sort-Object -Unique) -join ", ") + " / execute=" + $totalVise + " - corriger README.md")
+
 $total = $Pass + $Fail
 if ($Fail -eq 0) {
     Write-Host ("RESULTAT : " + $Pass + "/" + $total + " controles passes.") -ForegroundColor Green

@@ -11,7 +11,7 @@ d'un réseau pédagogique.
 | `Install-Office2024-KMS.ps1` | Source de l'interface (v8.1) |
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (69 cas, `-Fast` pour la section 1 seule) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (70 cas, `-Fast` pour la section 1 seule) |
 | `.githooks/pre-commit` | Contrôle rapide de l'index avant chaque commit, refuse l'EXE désynchronisé |
 | `.github/workflows/controle-exe.yml` | Même contrôle sur GitHub Actions (push sur `main`, pull request) |
 | `setup.exe` | Office Deployment Tool — **non versionné**, à récupérer (voir ci-dessous) |
@@ -87,7 +87,12 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps
 
 `-Fast` ne joue que la section 1 — syntaxe du script, empreinte du script embarqué et
 propriétés de l'EXE — soit quelques secondes : c'est exactement ce que lance le hook avant
-chaque commit. Sans commutateur, la suite complète (69 cas) tourne, comme sur GitHub.
+chaque commit. Sans commutateur, la suite complète (70 cas) tourne, comme sur GitHub.
+
+Le **dernier contrôle** de la suite relit ce README, y cherche toutes les mentions
+« N cas » et exige qu'elles valent le total réellement exécuté : un cas ajouté ou retiré
+sans mettre la documentation à jour fait donc échouer le contrôle, localement comme sur
+GitHub. C'est ce qui empêche le chiffre annoncé de dériver à nouveau (60, 67, 69…).
 
 Vérifie d'abord que l'EXE distribué correspond au script : l'empreinte SHA-256 du script
 embarqué dans le binaire doit être celle du `.ps1`, sinon le contrôle s'arrête avec un
@@ -143,7 +148,7 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   ralenti ; `git commit --no-verify` reste possible pour un cas exceptionnel, et se voit
   dans l'historique.
 - **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la suite
-  **complète** (69 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
+  **complète** (70 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
   request : un EXE oublié ou compilé autrement fait échouer la vérification côté serveur,
   même si le hook local n'était pas installé — et sans rien imposer à la boucle locale.
 

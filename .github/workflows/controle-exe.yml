@@ -2,7 +2,8 @@ name: Controle de l'EXE livre
 
 # Suite COMPLETE, cote serveur : le hook local ne fait qu'un controle rapide
 # (-Fast, section 1) pour rester utilisable. Ici, un push direct sur main ou une
-# pull request dont l'EXE ne correspond plus au script echoue sur les 69 cas.
+# pull request dont l'EXE ne correspond plus au script echoue sur la suite complete
+# (dont le controle qui compare ce total au nombre de cas annonce dans README.md).
 on:
   push:
     branches: [main]
