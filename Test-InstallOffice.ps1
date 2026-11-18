@@ -444,6 +444,107 @@ try {
     bg_RestoreProxy $cfgP -State $etatKo
     Check "netsh en erreur : restauration complete malgre l'echec" ((Copy-Etat $machine | ConvertTo-Json -Compress -Depth 5) -eq ($avant | ConvertTo-Json -Compress -Depth 5)) (Copy-Etat $machine | ConvertTo-Json -Compress -Depth 5)
     Check "netsh en erreur : journal de restauration" ((($script:ProxyLogs -join " | ") -match "Configuration proxy d'origine restauree") -and (($script:ProxyLogs -join " | ") -match 'Proxy WinINet \(session\) applique')) ($script:ProxyLogs -join " | ")
+    Section "10. Hook pre-commit : contenu indexe"
+    # Le hook doit valider l'index (ce qui part dans le commit), pas l'arbre de travail.
+    # Preuve : faire diverger les deux dans un depot jetable et exiger le bon verdict.
+    $gitCmd = Get-Command git -ErrorAction SilentlyContinue
+    $hookSrc = Join-Path $PSScriptRoot ".githooks\pre-commit"
+    if ($null -eq $gitCmd) {
+        Check "hook : git disponible" $false "git introuvable : le hook pre-commit n'a pas pu etre verifie"
+    }
+    elseif (-not (Test-Path -LiteralPath $hookSrc)) {
+        Check "hook : .githooks/pre-commit present" $false "hook absent : le controle automatique n'est pas installe"
+    }
+    elseif ($env:INSTALLOFFICE_HOOKTEST -eq "1") {
+        Write-Host "  (suite lancee par le hook : section 10 ignoree pour ne pas recurser)"
+    }
+    else {
+        $depot = Join-Path $Work "hookrepo"
+        $avantTest = $env:INSTALLOFFICE_HOOKTEST
+        New-Item -ItemType Directory -Path $depot -Force | Out-Null
+        try {
+            foreach ($f in @("Install-Office2024-KMS.ps1", "Install-Office2024-KMS.exe", "Test-InstallOffice.ps1")) {
+                Copy-Item -LiteralPath (Join-Path $PSScriptRoot $f) -Destination $depot -Force
+            }
+            Copy-Item -LiteralPath (Join-Path $PSScriptRoot ".githooks") -Destination $depot -Recurse -Force
+            $scriptDepot = Join-Path $depot "Install-Office2024-KMS.ps1"
+
+            $null = & git -C $depot init -q 2>&1
+            $null = & git -C $depot config core.autocrlf false
+            $null = & git -C $depot config core.hooksPath .githooks
+            $null = & git -C $depot config commit.gpgsign false
+            $null = & git -C $depot config user.email "controle@example.invalid"
+            $null = & git -C $depot config user.name "Controle automatise"
+            $null = & git -C $depot add -A 2>&1
+            # --no-verify : sinon le hook de ce depot jetable relance la suite (recursion).
+            $null = & git -C $depot commit -q --no-verify -m "etat de reference" 2>&1
+            $headHash = (Get-FileHash -LiteralPath $scriptDepot -Algorithm SHA256).Hash
+
+            # Cas A : l'index derive, l'arbre de travail est propre.
+            Copy-Item -LiteralPath $scriptDepot -Destination (Join-Path $depot "_pristine.ps1") -Force
+            Add-Content -LiteralPath $scriptDepot -Value "# derive indexee uniquement" -Encoding ASCII
+            $null = & git -C $depot add "Install-Office2024-KMS.ps1" 2>&1
+            Copy-Item -LiteralPath (Join-Path $depot "_pristine.ps1") -Destination $scriptDepot -Force
+            Remove-Item -LiteralPath (Join-Path $depot "_pristine.ps1") -Force
+            & git -C $depot diff --quiet
+            $arbreVsIndex = ($LASTEXITCODE -ne 0)
+            & git -C $depot diff --cached --quiet
+            $indexVsHead = ($LASTEXITCODE -ne 0)
+            Check "hook : index different de l'arbre de travail" ($arbreVsIndex -and $indexVsHead) ("arbre/index diverge=" + $arbreVsIndex + " index/HEAD diverge=" + $indexVsHead)
+            $arbreHash = (Get-FileHash -LiteralPath $scriptDepot -Algorithm SHA256).Hash
+            Check "hook : arbre de travail laisse propre" ($arbreHash -eq $headHash) ("arbre=" + $arbreHash.Substring(0, 12) + " HEAD=" + $headHash.Substring(0, 12))
+
+            $env:INSTALLOFFICE_HOOKTEST = "1"
+            # Les messages d'echec du hook partent sur stderr : ne pas les traiter
+            # comme des exceptions (le harnais tourne en ErrorActionPreference Stop).
+            $eapAvant = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            Push-Location $depot
+            $sortieA = (& sh ".githooks/pre-commit" 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+            $codeA = $LASTEXITCODE
+            Pop-Location
+            $ErrorActionPreference = $eapAvant
+            $sortieAU = ($sortieA -replace "\s+", " ").Trim()
+            Check "hook : refuse un script indexe desynchronise" ($codeA -ne 0) ("code=" + $codeA + " sortie=" + $sortieAU)
+            Check "hook : refuse en parlant de recompilation" ($sortieA.Contains("ne correspond plus au script")) $sortieAU
+            # L'empreinte citee dans l'echec doit etre celle du script indexe, pas celle de l'arbre.
+            $vueHook = Join-Path $depot "_vue"
+            New-Item -ItemType Directory -Path $vueHook -Force | Out-Null
+            $null = & git -C $depot checkout-index --all --prefix="$vueHook/" 2>&1
+            $hashIndexe = (Get-FileHash -LiteralPath (Join-Path $vueHook "Install-Office2024-KMS.ps1") -Algorithm SHA256).Hash
+            Remove-Item -LiteralPath $vueHook -Recurse -Force -ErrorAction SilentlyContinue
+            Check "hook : empreinte comparee = script indexe" (($hashIndexe -ne $headHash) -and $sortieA.Contains($hashIndexe.Substring(0, 12))) ("index=" + $hashIndexe.Substring(0, 12) + " arbre=" + $headHash.Substring(0, 12) + " sortie=" + $sortieAU)
+
+            # Cas B : l'arbre de travail derive, l'index est propre (suite temoin, rapide).
+            $null = & git -C $depot reset -q 2>&1
+            Add-Content -LiteralPath $scriptDepot -Value "# derive non indexee" -Encoding ASCII
+            $sonde = Join-Path $depot "_sonde.txt"
+            $stub = @(
+                '$h = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot "Install-Office2024-KMS.ps1") -Algorithm SHA256).Hash',
+                '[System.IO.File]::WriteAllText($env:HOOK_PROBE, $h)',
+                'exit 0'
+            ) -join "`r`n"
+            [System.IO.File]::WriteAllText((Join-Path $depot "Test-InstallOffice.ps1"), $stub + "`r`n", (New-Object System.Text.UTF8Encoding($false)))
+            $null = & git -C $depot add "Test-InstallOffice.ps1" 2>&1
+            $env:HOOK_PROBE = $sonde
+            $ErrorActionPreference = "Continue"
+            Push-Location $depot
+            $sortieB = (& sh ".githooks/pre-commit" 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+            $codeB = $LASTEXITCODE
+            Pop-Location
+            $ErrorActionPreference = $eapAvant
+            Check "hook : accepte un arbre derive non indexe" ($codeB -eq 0) ("code=" + $codeB + " sortie=" + (($sortieB -replace "\s+", " ").Trim()))
+            $vu = if (Test-Path -LiteralPath $sonde) { [System.IO.File]::ReadAllText($sonde).Trim() } else { "(absent)" }
+            $arbreHash2 = (Get-FileHash -LiteralPath $scriptDepot -Algorithm SHA256).Hash
+            $vuCourt = if ($vu.Length -ge 12) { $vu.Substring(0, 12) } else { $vu }
+            Check "hook : suite lancee sur le contenu indexe" (($vu -eq $headHash) -and ($arbreHash2 -ne $headHash)) ("suite a vu=" + $vuCourt + " index=" + $headHash.Substring(0, 12) + " arbre=" + $arbreHash2.Substring(0, 12))
+        }
+        finally {
+            $env:INSTALLOFFICE_HOOKTEST = $avantTest
+            $env:HOOK_PROBE = $null
+            if (Test-Path -LiteralPath $depot) { Remove-Item -LiteralPath $depot -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    }
 }
 catch {
     Write-Host ("ERREUR DU HARNAIS : " + $_.Exception.Message) -ForegroundColor Red

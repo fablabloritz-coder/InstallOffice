@@ -1,7 +1,11 @@
 #!/bin/sh
 # Controle automatique avant chaque commit : l'EXE livre doit rester aligne sur
 # le script (empreinte du script embarque) et sur ses proprietes de compilation.
-# Le travail est fait par Test-InstallOffice.ps1, seule source de verite.
+#
+# Ce qui est controle est l'INDEX, pas l'arbre de travail : c'est l'index qui
+# part dans le commit. Les fichiers versionnes y sont donc exportes dans un
+# dossier temporaire, et Test-InstallOffice.ps1 y tourne tel qu'il sera commite.
+# Une modification non indexee ne peut donc ni masquer une derive, ni en creer une.
 #
 # Activation, une fois par clone :
 #   git config core.hooksPath .githooks
@@ -27,12 +31,25 @@ if ! command -v powershell >/dev/null 2>&1; then
     exit 0
 fi
 
-echo "pre-commit: controle de l'EXE livre (Test-InstallOffice.ps1)..."
+echo "pre-commit: controle de l'EXE tel qu'il sera commite (index)..."
+exportement=$(mktemp -d 2>/dev/null) || {
+    echo "pre-commit: dossier temporaire indisponible - commit refuse." >&2
+    exit 1
+}
 journal=$(mktemp 2>/dev/null) || journal="/tmp/pre-commit-$$.log"
-powershell -NoProfile -STA -ExecutionPolicy Bypass -File "./Test-InstallOffice.ps1" >"$journal" 2>&1
+
+if ! git checkout-index --all --prefix="$exportement/" >/dev/null 2>&1; then
+    echo "pre-commit: export de l'index impossible - commit refuse." >&2
+    rm -rf "$exportement"
+    exit 1
+fi
+
+powershell -NoProfile -STA -ExecutionPolicy Bypass -File "$exportement/Test-InstallOffice.ps1" >"$journal" 2>&1
 code=$?
+rm -rf "$exportement"
+
 if [ "$code" -ne 0 ]; then
-    echo "pre-commit: ECHEC du controle (code $code) - commit refuse." >&2
+    echo "pre-commit: ECHEC du controle de l'index (code $code) - commit refuse." >&2
     echo "--- echecs ---" >&2
     grep -E "ECHEC|RESULTAT" "$journal" | head -20 >&2
     echo "--- fin ---" >&2
@@ -43,5 +60,5 @@ if [ "$code" -ne 0 ]; then
     exit 1
 fi
 rm -f "$journal"
-echo "pre-commit: OK - EXE aligne sur le script et ses proprietes."
+echo "pre-commit: OK - l'index contient un EXE aligne sur son script."
 exit 0

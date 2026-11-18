@@ -11,7 +11,7 @@ d'un réseau pédagogique.
 | `Install-Office2024-KMS.ps1` | Source de l'interface (v8.1) |
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (60 cas) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (67 cas) |
 | `.githooks/pre-commit` | Refuse le commit si l'EXE livré ne passe plus ces contrôles |
 | `.github/workflows/controle-exe.yml` | Même contrôle sur GitHub Actions (push sur `main`, pull request) |
 | `setup.exe` | Office Deployment Tool — **non versionné**, à récupérer (voir ci-dessous) |
@@ -121,7 +121,11 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
 - **avant chaque commit**, le hook `.githooks/pre-commit` lance la suite dès que
   `Install-Office2024-KMS.ps1`, `Install-Office2024-KMS.exe` ou `Test-InstallOffice.ps1`
   est dans le commit, et refuse le commit si elle échoue (les échecs sont affichés, pas
-  avalés). Il s'active une fois par clone :
+  avalés). Il ne lit pas l'arbre de travail : l'index est exporté par
+  `git checkout-index` dans un dossier temporaire et la suite y tourne sur le contenu
+  **tel qu'il sera commité** — une modification non indexée ne peut donc ni masquer une
+  dérive, ni en créer une. La section 10 de la suite le prouve en faisant diverger index
+  et arbre de travail dans un dépôt jetable. Il s'active une fois par clone :
 
   ```powershell
   git config core.hooksPath .githooks
