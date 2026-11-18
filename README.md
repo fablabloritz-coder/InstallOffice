@@ -11,7 +11,7 @@ d'un réseau pédagogique.
 | `Install-Office2024-KMS.ps1` | Source de l'interface (v8.1) |
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (81 cas, `-Fast` pour la section 1 seule) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (83 cas, `-Fast` pour la section 1 seule) |
 | `.githooks/pre-commit` | Contrôle rapide de l'index avant chaque commit, refuse l'EXE désynchronisé |
 | `.github/workflows/controle-exe.yml` | Suite complète + contrat de fins de ligne (checkout sans conversion) sur GitHub Actions, à chaque push sur `main` et à chaque pull request |
 | `setup.exe` | Office Deployment Tool — **non versionné**, à récupérer (voir ci-dessous) |
@@ -98,7 +98,7 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps
 
 `-Fast` ne joue que la section 1 — syntaxe du script, empreinte du script embarqué et
 propriétés de l'EXE — soit quelques secondes : c'est exactement ce que lance le hook avant
-chaque commit. Sans commutateur, la suite complète (81 cas) tourne, comme sur GitHub.
+chaque commit. Sans commutateur, la suite complète (83 cas) tourne, comme sur GitHub.
 
 Le **dernier contrôle** de la suite relit ce README, y cherche toutes les mentions
 « N cas » et exige qu'elles valent le total réellement exécuté : un cas ajouté ou retiré
@@ -141,7 +141,11 @@ même aboutir à une restauration complète.
 Le relais d'authentification est vérifié de la même façon, contre un proxy amont simulé
 sur la loopback : un `CONNECT` muni des bons identifiants doit rendre `200` et laisser
 passer les données dans les deux sens, un mauvais mot de passe doit rendre `407`, et
-`Stop-ProxyRelay` doit libérer le port d'écoute.
+`Stop-ProxyRelay` doit libérer le port d'écoute. Le câblage côté déploiement est
+couvert de la même façon : face à un proxy qui répond `407`, le worker produit le
+message des identifiants quand la configuration porte `ProxyRelay`, le message
+historique (`LocalSystem`) sinon, et dans les deux cas sans appliquer de proxy à la
+machine.
 
 Comment : un faux `setup.exe` est compilé dans `%TEMP%` (il enregistre ses arguments et
 renvoie le code voulu) et un `ospp.vbs` factice remplace celui d'Office ; aucun
@@ -174,7 +178,7 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   ralenti ; `git commit --no-verify` reste possible pour un cas exceptionnel, et se voit
   dans l'historique.
 - **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la suite
-  **complète** (81 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
+  **complète** (83 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
   request : un EXE oublié ou compilé autrement fait échouer la vérification côté serveur,
   même si le hook local n'était pas installé — et sans rien imposer à la boucle locale.
 - **le contrat de fins de ligne y est vérifié aussi** : un second job refait un checkout

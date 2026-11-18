@@ -648,6 +648,29 @@ public class FakeAuthProxy
     } catch { $ferme = $true }
     Check "relais proxy : arret libere le port d'ecoute" $ferme ("port " + $portLibere + " encore ouvert=" + (-not $ferme))
 
+    # --- Cablage cote deploiement : ProxyRelay transmis au worker -------------
+    # Le worker teste le CDN AVANT de lancer setup.exe. Un proxy qui repond 407 doit
+    # produire le message du relais quand la config porte ProxyRelay, et le message
+    # historique sinon : c'est le champ de config qui choisit, pas une heuristique.
+    $faux407 = New-Object FakeAuthProxy -ArgumentList @("eleve", "secret")
+    $faux407.Start()
+
+    $cfgRelais = New-Cfg (New-SyncHash) $fakeExe (Join-Path $Work "relais_407") -Proxy $true
+    $cfgRelais.ProxyPort = [string]$faux407.Port
+    $cfgRelais.ProxyRelay = $true
+    $cfgRelais.ProxyRelayTarget = "10.0.0.1:3128"
+    $r = Invoke-Deploy $Worker $cfgRelais $argsFile
+    $t = @($r.Logs) -join " "
+    $netsh = @($r.Logs | Where-Object { $_ -match 'Proxy WinHTTP \(machine\) applique' }).Count -gt 0
+    Check "relais deploye : 407 -> message des identifiants, sans toucher au poste" (($r.Sync.StepState[2] -eq "error") -and ($t -match 'refuse les identifiants fournis \(407\)') -and ($t -match '10\.0\.0\.1:3128') -and ($t -match 'jamais enregistre') -and (-not $netsh)) ("netsh=" + $netsh + " | " + (Solution $r))
+
+    $cfgSansRelais = New-Cfg (New-SyncHash) $fakeExe (Join-Path $Work "relais_407_sans") -Proxy $true
+    $cfgSansRelais.ProxyPort = [string]$faux407.Port
+    $r2 = Invoke-Deploy $Worker $cfgSansRelais $argsFile
+    $t2 = @($r2.Logs) -join " "
+    Check "relais deploye : sans ProxyRelay, message historique (LocalSystem)" (($r2.Sync.StepState[2] -eq "error") -and ($t2 -match 'exige une authentification \(407\)') -and ($t2 -match 'LocalSystem') -and ($t2 -notmatch 'refuse les identifiants fournis')) (Solution $r2)
+    $faux407.Stop()
+
     Section "9. Snapshot du proxy : copie, et echec netsh"
     # 1) l'etat retourne par bg_ApplyProxy doit etre une copie, pas une vue de la machine
     $machine.WinInet.ProxyEnable = 42
