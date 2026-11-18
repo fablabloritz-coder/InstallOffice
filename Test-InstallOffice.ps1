@@ -75,6 +75,22 @@ function Get-FunctionText {
     throw ("fin de " + $Name + " introuvable")
 }
 
+function Get-ShownBlock {
+    param([string[]]$Lines)
+    $start = -1
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match '^\$form\.Add_Shown\(\{') { $start = $i ; break }
+    }
+    if ($start -lt 0) { throw "bloc Add_Shown introuvable dans le script" }
+    $depth = 0
+    for ($i = $start; $i -lt $Lines.Count; $i++) {
+        $depth += ([regex]::Matches($Lines[$i], '\{')).Count
+        $depth -= ([regex]::Matches($Lines[$i], '\}')).Count
+        if ($depth -eq 0) { return ($Lines[($start + 1)..($i - 1)] -join "`n") }
+    }
+    throw "fin du bloc Add_Shown introuvable"
+}
+
 # ---------------------------------------------------------------- fixtures
 function New-FakeSetup {
     param([string]$Path)
@@ -815,6 +831,81 @@ public class FakeAuthProxy
     $apresNetsh = ([string](& $sinkReel.Show)).Trim()
     $apresInet = & $sinkReel.ReadInet
     Check "reliquat reel : lectures sans aucune ecriture" (($apresNetsh -eq $avantNetsh) -and ([int]$apresInet.ProxyEnable -eq [int]$avantInet.ProxyEnable) -and ([string]$apresInet.ProxyServer -eq [string]$avantInet.ProxyServer) -and ([string]$apresInet.ProxyOverride -eq [string]$avantInet.ProxyOverride)) ("netsh identique=" + ($apresNetsh -eq $avantNetsh) + " ProxyEnable=" + $avantInet.ProxyEnable + "->" + $apresInet.ProxyEnable + " ProxyServer=[" + $apresInet.ProxyServer + "]")
+
+    Section "8 quater. Bloc de demarrage : reliquat propose au demarrage"
+    # Le bloc Add_Shown est extrait tel quel et execute : seules les fonctions qu'il
+    # appelle et les controles WinForms qu'il touche sont remplaces. C'est donc le
+    # cablage reel du demarrage qui est exerce (test du reliquat, puis remise en
+    # direct seulement si l'utilisateur accepte), et non les fonctions seules.
+    $corpsDemarrage = Get-ShownBlock -Lines $lines
+
+    $script:JournalDemarrage = New-Object System.Collections.Generic.List[string]
+    $fauxLogBox = New-Object PSObject
+    Add-Member -InputObject $fauxLogBox -MemberType ScriptMethod -Name AppendText -Value { param($t) $script:JournalDemarrage.Add([string]$t) }
+    Add-Member -InputObject $fauxLogBox -MemberType ScriptMethod -Name ScrollToCaret -Value { }
+    $logBox = $fauxLogBox
+    $chkUseDepot    = New-Object PSObject -Property @{ Checked = $false }
+    $depotPathBox   = New-Object PSObject -Property @{ Enabled = $false }
+    $depotBrowseBtn = New-Object PSObject -Property @{ Enabled = $false }
+
+    $script:Demarrage = @{ Appels = $null ; Residu = $null ; Reponse = $true ; Port = 0 ; Message = "" }
+    function Get-RelayPort { param([string]$Path) $script:Demarrage.Appels.Add("Get-RelayPort") ; return [int]$script:Demarrage.Port }
+    function Test-ProxyRelayResidue { param($Sink, [int]$RelayPort = 0, [int]$TimeoutMs = 1500) $script:Demarrage.Appels.Add("Test-ProxyRelayResidue:" + $RelayPort) ; return $script:Demarrage.Residu }
+    function Reset-ProxyRelayResidue { param($Sink, [bool]$WinHttp = $true, [bool]$WinInet = $true) $script:Demarrage.Appels.Add("Reset-ProxyRelayResidue:winhttp=" + $WinHttp + ",wininet=" + $WinInet) ; return @{ OK = $true ; Detail = "" } }
+    function Clear-RelayPort { param([string]$Path) $script:Demarrage.Appels.Add("Clear-RelayPort") }
+    function Confirm-ProxyRelayRestore { param([string]$Message) $script:Demarrage.Message = $Message ; $script:Demarrage.Appels.Add("Confirm-ProxyRelayRestore") ; return [bool]$script:Demarrage.Reponse }
+    function Update-PreChecks { return $null }
+    function Update-ProxyControlState { }
+    function Get-Config { return $null }
+
+    function Invoke-Demarrage {
+        param([string]$Corps, $Residu, [bool]$Reponse = $true, [int]$Port = 4321)
+        $script:Demarrage.Appels = New-Object System.Collections.Generic.List[string]
+        $script:JournalDemarrage.Clear()
+        $script:Demarrage.Residu  = $Residu
+        $script:Demarrage.Reponse = $Reponse
+        $script:Demarrage.Port    = $Port
+        $script:Demarrage.Message = ""
+        & ([scriptblock]::Create($Corps)) | Out-Null
+        return $script:Demarrage.Appels
+    }
+    function Nb-Reset { param($Appels) @($Appels | Where-Object { $_ -like 'Reset-*' }).Count }
+
+    # 1. Reliquat trouve et utilisateur d'accord : test, question, remise, marqueur efface.
+    $residuTrouve = @{ Found = $true ; Host = "127.0.0.1" ; Port = 4321 ; Alive = $false ; Reason = "relais mort" ; WinHttp = $true ; WinInet = $false }
+    $appels1 = @(Invoke-Demarrage -Corps $corpsDemarrage -Residu $residuTrouve -Reponse $true)
+    $journal1 = ($script:JournalDemarrage -join " ").Trim()
+    $ok1 = ($appels1.Count -eq 5) -and ($appels1[0] -eq "Get-RelayPort") -and
+           ($appels1[1] -eq "Test-ProxyRelayResidue:4321") -and ($appels1[2] -eq "Confirm-ProxyRelayRestore") -and
+           ($appels1[3] -eq "Reset-ProxyRelayResidue:winhttp=True,wininet=False") -and ($appels1[4] -eq "Clear-RelayPort") -and
+           ($journal1 -match 'Reliquat supprime') -and ($script:Demarrage.Message -match 'Windows \(WinHTTP\)')
+    Check "demarrage : reliquat trouve -> test puis remise en direct" $ok1 (($appels1 -join " > ") + " | journal=" + $journal1)
+
+    # 2. Utilisateur refuse : rien n'est modifie, le marqueur reste pour plus tard.
+    $appels2 = @(Invoke-Demarrage -Corps $corpsDemarrage -Residu $residuTrouve -Reponse $false)
+    $journal2 = ($script:JournalDemarrage -join " ").Trim()
+    $ok2 = ($appels2 -contains "Confirm-ProxyRelayRestore") -and ((Nb-Reset $appels2) -eq 0) -and
+           (-not ($appels2 -contains "Clear-RelayPort")) -and ($journal2 -match 'Reliquat conserve')
+    Check "demarrage : refus de l'utilisateur -> aucune modification" $ok2 (($appels2 -join " > ") + " | journal=" + $journal2)
+
+    # 3. Relais toujours vivant : aucune question, aucune remise en direct.
+    $residuVivant = @{ Found = $false ; Host = "" ; Port = 0 ; Alive = $true ; Reason = "relais vivant" ; WinHttp = $false ; WinInet = $false }
+    $appels3 = @(Invoke-Demarrage -Corps $corpsDemarrage -Residu $residuVivant -Reponse $true)
+    $ok3 = ($appels3 -contains "Test-ProxyRelayResidue:4321") -and (-not ($appels3 -contains "Confirm-ProxyRelayRestore")) -and
+           ((Nb-Reset $appels3) -eq 0) -and (-not ($appels3 -contains "Clear-RelayPort"))
+    Check "demarrage : pas de reliquat -> ni question ni remise en direct" $ok3 ($appels3 -join " > ")
+
+    # 4. Marqueur perime (le port enregistre n'est plus celui du relais) : on l'efface.
+    $residuPerime = @{ Found = $false ; Host = "" ; Port = 0 ; Alive = $false ; Reason = "port different" ; WinHttp = $false ; WinInet = $false }
+    $appels4 = @(Invoke-Demarrage -Corps $corpsDemarrage -Residu $residuPerime -Reponse $true)
+    $ok4 = ($appels4 -contains "Clear-RelayPort") -and ((Nb-Reset $appels4) -eq 0) -and
+           (-not ($appels4 -contains "Confirm-ProxyRelayRestore"))
+    Check "demarrage : marqueur perime efface sans remise en direct" $ok4 ($appels4 -join " > ")
+
+    # 5. Le bloc extrait est bien celui du script, et l'ordre du source est le bon.
+    $iTest  = $corpsDemarrage.IndexOf("Test-ProxyRelayResidue")
+    $iReset = $corpsDemarrage.IndexOf("Reset-ProxyRelayResidue")
+    Check "demarrage : bloc Add_Shown reel (test avant la remise en direct)" (($iTest -ge 0) -and ($iReset -gt $iTest) -and ($corpsDemarrage -match 'Update-PreChecks')) ("test@" + $iTest + " reset@" + $iReset + " taille=" + $corpsDemarrage.Length)
 
     Section "9. Snapshot du proxy : copie, et echec netsh"
     # 1) l'etat retourne par bg_ApplyProxy doit etre une copie, pas une vue de la machine

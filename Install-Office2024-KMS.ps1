@@ -393,6 +393,13 @@ function Reset-ProxyRelayResidue {
     @{ OK = $ok ; Detail = $detail.Trim() }
 }
 
+# La question posee au demarrage est isolee ici : le harnais remplace cette seule
+# fonction pour exercer le bloc Add_Shown sans afficher de dialogue.
+function Confirm-ProxyRelayRestore {
+    param([string]$Message)
+    ([System.Windows.Forms.MessageBox]::Show($Message, "Reliquat de proxy", "YesNo", [System.Windows.Forms.MessageBoxIcon]::Warning) -eq "Yes")
+}
+
 # Le marqueur n'est oublie que si WinHTTP ne pointe plus sur le relais : sinon il
 # sert au prochain demarrage a proposer la remise en acces direct.
 function Clear-RelayPortIfRestored {
@@ -3237,7 +3244,7 @@ $form.Add_Shown({
             if ($residu.WinHttp) { $couches += "Windows (WinHTTP)" }
             if ($residu.WinInet) { $couches += "session (navigateur)" }
             $txt = "La configuration proxy de $($couches -join ' et ') pointe vers $($residu.Host):$($residu.Port), un relais local qui ne repond plus.`n`nC'est le residu d'un deploiement interrompu : tant qu'il reste la, Windows et Internet n'ont plus d'acces direct.`n`nRemettre Windows et la session en acces direct ?"
-            if ([System.Windows.Forms.MessageBox]::Show($txt, "Reliquat de proxy", "YesNo", [System.Windows.Forms.MessageBoxIcon]::Warning) -eq "Yes") {
+            if (Confirm-ProxyRelayRestore -Message $txt) {
                 $fix = Reset-ProxyRelayResidue -WinHttp ([bool]$residu.WinHttp) -WinInet ([bool]$residu.WinInet)
                 $ligne = if ($fix.OK) { "Reliquat supprime : acces direct retabli ($($couches -join ', '))." } else { "Remise en acces direct incomplete : $($fix.Detail)" }
             } else {
