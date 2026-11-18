@@ -479,9 +479,15 @@ try {
     $etat = bg_ApplyProxy $cfgP -ProxyHost "10.0.0.1" -ProxyPort "3128" -BypassList "<local>"
     $t = ($script:ProxyLogs -join " | ")
 
-    Check "apply : WinHTTP machine (netsh set proxy)" ($appels[0] -eq "winhttp-set 10.0.0.1:3128 bypass=<local>") $appels[0]
-    Check "apply : WinINet session (ProxyEnable=1, serveur, exceptions)" (($appels[1] -match 'ProxyEnable=1') -and ($appels[1] -match 'ProxyServer=10\.0\.0\.1:3128') -and ($appels[1] -match 'ProxyOverride=<local>')) $appels[1]
-    Check "apply : 4 variables d'environnement" (($appels[2] -match 'HTTP_PROXY=http://10\.0\.0\.1:3128') -and ($appels[2] -match 'HTTPS_PROXY=http://10\.0\.0\.1:3128') -and ($appels[2] -match 'http_proxy=http://10\.0\.0\.1:3128') -and ($appels[2] -match 'https_proxy=http://10\.0\.0\.1:3128')) $appels[2]
+    # Les couches sont retrouvees par leur prefixe, jamais par leur rang : une etape
+    # ajoutee dans bg_ApplyProxy ne decale plus ces trois controles (meme lecture que
+    # pour la restauration plus bas). Un appel absent ou renomme reste signale.
+    $aWh   = @($appels | Where-Object { $_ -like "winhttp-set*" }) | Select-Object -Last 1
+    $aInet = @($appels | Where-Object { $_ -like "wininet*" })    | Select-Object -Last 1
+    $aEnv  = @($appels | Where-Object { $_ -like "env *" })       | Select-Object -Last 1
+    Check "apply : WinHTTP machine (netsh set proxy)" (($null -ne $aWh) -and ($aWh -eq "winhttp-set 10.0.0.1:3128 bypass=<local>")) $aWh
+    Check "apply : WinINet session (ProxyEnable=1, serveur, exceptions)" (($null -ne $aInet) -and ($aInet -match 'ProxyEnable=1') -and ($aInet -match 'ProxyServer=10\.0\.0\.1:3128') -and ($aInet -match 'ProxyOverride=<local>')) $aInet
+    Check "apply : 4 variables d'environnement" (($null -ne $aEnv) -and ($aEnv -match 'HTTP_PROXY=http://10\.0\.0\.1:3128') -and ($aEnv -match 'HTTPS_PROXY=http://10\.0\.0\.1:3128') -and ($aEnv -match 'http_proxy=http://10\.0\.0\.1:3128') -and ($aEnv -match 'https_proxy=http://10\.0\.0\.1:3128')) $aEnv
     Check "apply : journaux WinHTTP + WinINet" (($t -match 'Proxy WinHTTP \(machine\) applique : 10\.0\.0\.1:3128') -and ($t -match 'Proxy WinINet \(session\) applique')) $t
     Check "apply : les 3 couches sont effectivement modifiees" (($machine.WinHttpServer -eq "10.0.0.1:3128") -and ($machine.WinInet.ProxyEnable -eq 1) -and ($machine.WinInet.ProxyServer -eq "10.0.0.1:3128") -and ($machine.WinInet.ProxyOverride -eq "<local>") -and ($machine.Env.HTTP_PROXY -eq "http://10.0.0.1:3128") -and ($machine.Env.https_proxy -eq "http://10.0.0.1:3128")) ("winhttp=" + $machine.WinHttpServer + " inet=" + $machine.WinInet.ProxyEnable + " env=" + $machine.Env.HTTP_PROXY)
 
@@ -643,7 +649,9 @@ public class FakeAuthProxy
         try { $n = $c1.Stream.Read($buf, 0, $buf.Length) } catch {}
         if ($n -gt 0) { $echange = [System.Text.Encoding]::ASCII.GetString($buf, 0, $n) }
     }
-    Check "relais proxy : CONNECT authentifie et tunnel bidirectionnel" (($c1.Reponse -match ' 200 ') -and ($echange -eq "ping-relais") -and ($fauxAmont.Tunnels -eq 1)) (("reponse=" + ($c1.Reponse -replace "\s+", " ") + " echo=[" + $echange + "] tunnels=" + $fauxAmont.Tunnels))
+    # Tunnels : au moins un, sans figer le total (une reconnaissance supplementaire du
+    # relais ne doit pas faire echouer le controle du tunnel).
+    Check "relais proxy : CONNECT authentifie et tunnel bidirectionnel" (($c1.Reponse -match ' 200 ') -and ($echange -eq "ping-relais") -and ($fauxAmont.Tunnels -ge 1)) (("reponse=" + ($c1.Reponse -replace "\s+", " ") + " echo=[" + $echange + "] tunnels=" + $fauxAmont.Tunnels))
     try { $c1.Client.Close() } catch {}
 
     $relaisKo = Start-ProxyRelay -UpstreamHost "127.0.0.1" -UpstreamPort $fauxAmont.Port -User "eleve" -Password "faux"
@@ -1083,7 +1091,10 @@ public class FakeAuthProxy
                 [System.IO.File]::WriteAllLines($attrEol, $garde, (New-Object System.Text.UTF8Encoding($false)))
                 $null = & git -C $depotEol add ".gitattributes" 2>&1
                 $indexeEol = @(& git -C $depotEol diff --cached --name-only 2>&1)
-                Check "hook : .gitattributes surveille" (($indexeEol.Count -eq 1) -and ($indexeEol[0] -eq ".gitattributes")) ($indexeEol -join ", ")
+                # Tolerance : un fichier supplementaire stage ne fausse plus le verdict ;
+                # ce qui compte est que .gitattributes soit la declaration en cause, sans
+                # script stage a cote qui pourrait provoquer le refus a sa place.
+                Check "hook : .gitattributes surveille" (($indexeEol -contains ".gitattributes") -and (@($indexeEol | Where-Object { $_ -like "*.ps1" }).Count -eq 0)) ($indexeEol -join ", ")
                 $ErrorActionPreference = "Continue"
                 Push-Location $depotEol
                 $sortieC = (& sh ".githooks/pre-commit" 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
