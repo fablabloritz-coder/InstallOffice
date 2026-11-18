@@ -589,6 +589,55 @@ try {
             $arbreHash2 = (Get-FileHash -LiteralPath $scriptDepot -Algorithm SHA256).Hash
             $vuCourt = if ($vu.Length -ge 12) { $vu.Substring(0, 12) } else { $vu }
             Check "hook : suite lancee sur le contenu indexe" (($vu -eq $headHash) -and ($arbreHash2 -ne $headHash)) ("suite a vu=" + $vuCourt + " index=" + $headHash.Substring(0, 12) + " arbre=" + $arbreHash2.Substring(0, 12))
+
+            # Cas C : la declaration de fins de ligne retiree sur un poste en
+            # core.autocrlf=true, comme celui du mainteneur. Le commit ne touche
+            # QUE .gitattributes : le hook doit quand meme se declencher, exporter
+            # l'index sans conversion automatique, et refuser.
+            $depotEol = Join-Path $Work "hookrepo_eol"
+            New-Item -ItemType Directory -Path $depotEol -Force | Out-Null
+            $eapEol = $ErrorActionPreference
+            # git add signale en stderr que LF sera converti en CRLF au prochain
+            # checkout : ce n'est pas une erreur, et le harnais tourne en Stop.
+            $ErrorActionPreference = "Continue"
+            try {
+                foreach ($f in @("Install-Office2024-KMS.exe", "Test-InstallOffice.ps1", ".gitattributes")) {
+                    Copy-Item -LiteralPath (Join-Path $PSScriptRoot $f) -Destination $depotEol -Force
+                }
+                Copy-Item -LiteralPath (Join-Path $PSScriptRoot ".githooks") -Destination $depotEol -Recurse -Force
+                $scriptEol = Join-Path $depotEol "Install-Office2024-KMS.ps1"
+                $txtLf = ([System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "Install-Office2024-KMS.ps1"))) -replace "`r`n", "`n"
+                [System.IO.File]::WriteAllText($scriptEol, $txtLf, (New-Object System.Text.UTF8Encoding($false)))
+                $null = & git -C $depotEol init -q 2>&1
+                $null = & git -C $depotEol config core.autocrlf true
+                $null = & git -C $depotEol config core.eol native
+                $null = & git -C $depotEol config core.hooksPath .githooks
+                $null = & git -C $depotEol config commit.gpgsign false
+                $null = & git -C $depotEol config user.email "controle@example.invalid"
+                $null = & git -C $depotEol config user.name "Controle automatise"
+                $null = & git -C $depotEol add -A 2>&1
+                $null = & git -C $depotEol commit -q --no-verify -m "etat de reference" 2>&1
+                # La regression : uniquement la declaration de fins de ligne.
+                $attrEol = Join-Path $depotEol ".gitattributes"
+                $garde = @([System.IO.File]::ReadAllLines($attrEol) | Where-Object { $_ -notmatch '^\s*\*\.ps1\s+text\s+eol=crlf\s*$' })
+                [System.IO.File]::WriteAllLines($attrEol, $garde, (New-Object System.Text.UTF8Encoding($false)))
+                $null = & git -C $depotEol add ".gitattributes" 2>&1
+                $indexeEol = @(& git -C $depotEol diff --cached --name-only 2>&1)
+                Check "hook : .gitattributes surveille" (($indexeEol.Count -eq 1) -and ($indexeEol[0] -eq ".gitattributes")) ($indexeEol -join ", ")
+                $ErrorActionPreference = "Continue"
+                Push-Location $depotEol
+                $sortieC = (& sh ".githooks/pre-commit" 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+                $codeC = $LASTEXITCODE
+                Pop-Location
+                $ErrorActionPreference = $eapAvant
+                $sortieCU = ($sortieC -replace "\s+", " ").Trim()
+                Check "hook : refuse une declaration de fins de ligne retiree" ($codeC -ne 0) ("code=" + $codeC + " sortie=" + $sortieCU)
+                Check "hook : export independant de core.autocrlf" ($sortieC -match "CRLF=0 LF isole=") $sortieCU
+            }
+            finally {
+                $ErrorActionPreference = $eapEol
+                if (Test-Path -LiteralPath $depotEol) { Remove-Item -LiteralPath $depotEol -Recurse -Force -ErrorAction SilentlyContinue }
+            }
         }
         finally {
             $env:INSTALLOFFICE_HOOKTEST = $avantTest

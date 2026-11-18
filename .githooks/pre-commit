@@ -7,6 +7,15 @@
 # dossier temporaire, et Test-InstallOffice.ps1 y tourne tel qu'il sera commite.
 # Une modification non indexee ne peut donc ni masquer une derive, ni en creer une.
 #
+# L'export se fait avec core.autocrlf=false : sans cela, git checkout-index
+# applique le reglage du poste et rend du CRLF meme quand .gitattributes ne
+# l'impose pas - le controle validait alors un fichier qui n'existe tel quel que
+# sur cette machine. Le hook voit donc exactement les octets du job CI.
+#
+# .gitattributes est surveille comme les trois autres fichiers : retirer la
+# declaration *.ps1 text eol=crlf change les octets livres, donc cela doit
+# declencher le controle au lieu de passer inapercu.
+#
 # Le hook ne lance que le controle rapide (Test-InstallOffice.ps1 -Fast : section 1,
 # syntaxe du script + empreinte et proprietes de l'EXE), quelques secondes, pour
 # qu'un commit normal ne donne pas envie de le contourner. La suite complete
@@ -17,9 +26,9 @@
 # Activation, une fois par clone :
 #   git config core.hooksPath .githooks
 #
-# Le controle ne porte que sur les fichiers qui decident du binaire : un commit
-# qui n'y touche pas (README, XML, workflow) n'est pas ralenti.
-# Dernier recours, volontaire et visible dans l'historique : git commit --no-verify
+# Un commit qui ne touche aucun de ces fichiers (README, XML, workflow) n'est pas
+# ralenti. Dernier recours, volontaire et visible dans l'historique :
+# git commit --no-verify
 
 set -u
 racine=$(git rev-parse --show-toplevel) || exit 1
@@ -28,7 +37,8 @@ cd "$racine" || exit 1
 modifies=$(git diff --cached --name-only -- \
     Install-Office2024-KMS.ps1 \
     Install-Office2024-KMS.exe \
-    Test-InstallOffice.ps1)
+    Test-InstallOffice.ps1 \
+    .gitattributes)
 if [ -z "$modifies" ]; then
     exit 0
 fi
@@ -45,7 +55,10 @@ exportement=$(mktemp -d 2>/dev/null) || {
 }
 journal=$(mktemp 2>/dev/null) || journal="/tmp/pre-commit-$$.log"
 
-if ! git checkout-index --all --prefix="$exportement/" >/dev/null 2>&1; then
+# -c core.autocrlf=false : l'export ne depend pas du reglage du poste, seulement
+# des attributs versionnes. Sans la declaration *.ps1 text eol=crlf, le script
+# arrive donc en LF ici aussi et le controle le dit.
+if ! git -c core.autocrlf=false -c core.eol=lf checkout-index --all --prefix="$exportement/" >/dev/null 2>&1; then
     echo "pre-commit: export de l'index impossible - commit refuse." >&2
     rm -rf "$exportement"
     exit 1
