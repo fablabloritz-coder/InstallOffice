@@ -771,6 +771,51 @@ public class FakeAuthProxy
     $fix11 = Reset-ProxyRelayResidue -Sink $s11.Sink -WinHttp $true -WinInet $true
     Check "reliquat proxy : echec de la remise en direct signale" ((-not $fix11.OK) -and ($fix11.Detail -match 'acces refuse')) ("ok=" + $fix11.OK + " detail=[" + $fix11.Detail + "]")
 
+    # --- Lecture reelle, en lecture seule --------------------------------------
+    # Tous les cas precedents remplacent le sink : une erreur dans la lecture reelle
+    # passerait inapercue. On interroge donc le poste (netsh + HKCU), on confronte le
+    # resultat a une lecture independante, et on verifie que rien n'a bouge.
+    $sinkReel = Get-ProxyRelaySink
+    $cleInet = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings"
+    $regReel = @{ ProxyEnable = $null ; ProxyServer = $null ; ProxyOverride = $null }
+    foreach ($p in @("ProxyEnable","ProxyServer","ProxyOverride")) {
+        try { $regReel[$p] = Get-ItemPropertyValue -Path $cleInet -Name $p -ErrorAction Stop } catch {}
+    }
+    $avantNetsh = ([string](& $sinkReel.Show)).Trim()
+    $avantInet = & $sinkReel.ReadInet
+    # Appel netsh independant : la sortie du sink doit etre celle du poste, pas un texte
+    # fabrique. Sur un poste en acces direct les valeurs sont des defauts, mais un sink
+    # qui n'appellerait pas netsh, ou une cle lue au mauvais endroit, tombent ici.
+    $netshDirect = (@(& netsh winhttp show proxy 2>&1) -join "`n").Trim()
+    $okCleInet = ([string]$sinkReel.InetKey -eq $cleInet)
+
+    # Appel sans -Sink : c'est le chemin par defaut du programme qui est exerce ici.
+    $hReel = Get-WinHttpProxyAddress
+    $iReel = Get-InetProxyAddress
+    $hExplicite = Get-WinHttpProxyAddress -Sink $sinkReel
+    $iExplicite = Get-InetProxyAddress -Sink $sinkReel
+
+    $loopNetsh = ($avantNetsh -match '(?i)(127\.0\.0\.1|localhost)\s*:\s*\d')
+    $okNetsh = ($avantNetsh.Length -gt 0) -and ($avantNetsh -eq $netshDirect)
+    if ($loopNetsh) { $okNetsh = $okNetsh -and ($null -ne $hReel) -and ($avantNetsh -match (':' + $hReel.Port)) }
+    else { $okNetsh = $okNetsh -and ($null -eq $hReel) }
+    $memeWinHttp = (($null -eq $hReel) -and ($null -eq $hExplicite)) -or (($null -ne $hReel) -and ($null -ne $hExplicite) -and ($hReel.Port -eq $hExplicite.Port))
+    $luWinHttp = if ($null -eq $hReel) { "aucun proxy loopback" } else { "$($hReel.Host):$($hReel.Port)" }
+    Check "reliquat reel : WinHTTP lu sur le poste (netsh reel, aucun sink simule)" ($okNetsh -and $memeWinHttp) ("netsh sink=[" + ($avantNetsh -replace "\s+", " ") + "] identique au netsh direct=" + ($avantNetsh -eq $netshDirect) + " lu=" + $luWinHttp)
+
+    $actifReel = ([int]$regReel.ProxyEnable -eq 1)
+    $loopInet = ([string]$regReel.ProxyServer -match '(?i)(127\.0\.0\.1|localhost)\s*:\s*\d')
+    $okInet = $okCleInet -and ([int]$avantInet.ProxyEnable -eq [int]$regReel.ProxyEnable) -and ([string]$avantInet.ProxyServer -eq [string]$regReel.ProxyServer) -and ([string]$avantInet.ProxyOverride -eq [string]$regReel.ProxyOverride)
+    if ($actifReel -and $loopInet) { $okInet = $okInet -and ($null -ne $iReel) -and (([string]$regReel.ProxyServer) -match (':' + $iReel.Port)) }
+    else { $okInet = $okInet -and ($null -eq $iReel) }
+    $memeInet = (($null -eq $iReel) -and ($null -eq $iExplicite)) -or (($null -ne $iReel) -and ($null -ne $iExplicite) -and ($iReel.Port -eq $iExplicite.Port))
+    $luInet = if ($null -eq $iReel) { "aucun proxy loopback" } else { "$($iReel.Host):$($iReel.Port)" }
+    Check "reliquat reel : proxy de session lu dans HKCU (aucun sink simule)" ($okInet -and $memeInet) ("cle=" + $sinkReel.InetKey + " (attendue=" + $cleInet + ", identique=" + $okCleInet + ") ProxyEnable=" + $regReel.ProxyEnable + " ProxyServer=[" + $regReel.ProxyServer + "] lu=" + $luInet)
+
+    $apresNetsh = ([string](& $sinkReel.Show)).Trim()
+    $apresInet = & $sinkReel.ReadInet
+    Check "reliquat reel : lectures sans aucune ecriture" (($apresNetsh -eq $avantNetsh) -and ([int]$apresInet.ProxyEnable -eq [int]$avantInet.ProxyEnable) -and ([string]$apresInet.ProxyServer -eq [string]$avantInet.ProxyServer) -and ([string]$apresInet.ProxyOverride -eq [string]$avantInet.ProxyOverride)) ("netsh identique=" + ($apresNetsh -eq $avantNetsh) + " ProxyEnable=" + $avantInet.ProxyEnable + "->" + $apresInet.ProxyEnable + " ProxyServer=[" + $apresInet.ProxyServer + "]")
+
     Section "9. Snapshot du proxy : copie, et echec netsh"
     # 1) l'etat retourne par bg_ApplyProxy doit etre une copie, pas une vue de la machine
     $machine.WinInet.ProxyEnable = 42

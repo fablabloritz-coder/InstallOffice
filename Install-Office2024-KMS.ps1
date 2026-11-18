@@ -316,6 +316,7 @@ function Get-ProxyRelaySink {
     $inetKey = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings"
     @{ Show  = { @(& netsh winhttp show proxy 2>&1) -join "`n" }
        Reset = { @(& netsh winhttp reset proxy 2>&1) -join "`n" }
+       InetKey = $inetKey
        ReadInet = {
            $v = @{ ProxyEnable = 0 ; ProxyServer = "" ; ProxyOverride = "" }
            foreach ($p in @("ProxyEnable","ProxyServer","ProxyOverride")) {
