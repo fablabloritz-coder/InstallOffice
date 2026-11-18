@@ -677,6 +677,46 @@ public class FakeAuthProxy
     } catch { $ferme = $true }
     Check "relais proxy : arret libere le port d'ecoute" $ferme ("port " + $portLibere + " encore ouvert=" + (-not $ferme))
 
+    # --- Le controle precedent doit reellement mordre --------------------------
+    # Variante fautive du relais, compilee ici : meme code, plus une seconde connexion
+    # amont authentifiee par CONNECT client. Aucun reseau reel (le proxy amont simule
+    # reste sur la loopback) et aucun total en dur : on exige seulement que l'egalite
+    # tunnels = CONNECT du controle precedent echoue devant cette fuite.
+    $fnFuite = (Get-FunctionText -Lines $lines -Name "Start-ProxyRelay")
+    $fnFuite = $fnFuite.Replace("OfficeProxyRelay", "OfficeProxyRelayFuite").Replace("function Start-ProxyRelay", "function Start-ProxyRelayFuite")
+    $ancreFuite = "            us.Flush();`n`n            string reponse = LireEntete(us);"
+    $blocFuite = @(
+        "            us.Flush();",
+        "",
+        "            // FUITE : une seconde connexion amont authentifiee par CONNECT client.",
+        "            TcpClient fuite = new TcpClient();",
+        "            fuite.Connect(_upHost, _upPort);",
+        "            NetworkStream fs = fuite.GetStream();",
+        "            fs.Write(rb, 0, rb.Length);",
+        "            fs.Flush();",
+        "            LireEntete(fs);",
+        "",
+        "            string reponse = LireEntete(us);"
+    ) -join "`n"
+    $ancreFuiteTrouvee = $fnFuite.Contains($ancreFuite)
+    if ($ancreFuiteTrouvee) { Invoke-Expression ($fnFuite.Replace($ancreFuite, $blocFuite)) }
+
+    $fauxFuite = New-Object FakeAuthProxy -ArgumentList @("eleve", "secret")
+    $fauxFuite.Start()
+    $script:ConnectOk = 0
+    $cFuite = $null
+    $relaisFuite = $null
+    if ($ancreFuiteTrouvee) {
+        $relaisFuite = Start-ProxyRelayFuite -UpstreamHost "127.0.0.1" -UpstreamPort $fauxFuite.Port -User "eleve" -Password "secret"
+        $cFuite = Connect-ViaRelais $relaisFuite.Port "officecdn.microsoft.com:443"
+    }
+    $tunnelsFuite = $fauxFuite.Tunnels
+    $connectFuite = $script:ConnectOk
+    if ($null -ne $cFuite) { try { $cFuite.Client.Close() } catch {} }
+    if ($null -ne $relaisFuite) { Stop-ProxyRelay -Relais $relaisFuite }
+    $fauxFuite.Stop()
+    Check "relais proxy : une fuite de tunnel fait echouer l'egalite tunnels/CONNECT" ($ancreFuiteTrouvee -and ($null -ne $cFuite) -and ($cFuite.Reponse -match ' 200 ') -and ($connectFuite -ge 1) -and ($tunnelsFuite -gt $connectFuite)) ("ancre=" + $ancreFuiteTrouvee + " tunnels=" + $tunnelsFuite + " connect_ok=" + $connectFuite)
+
     # --- Cablage cote deploiement : ProxyRelay transmis au worker -------------
     # Le worker teste le CDN AVANT de lancer setup.exe. Un proxy qui repond 407 doit
     # produire le message du relais quand la config porte ProxyRelay, et le message
