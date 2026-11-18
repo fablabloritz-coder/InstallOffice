@@ -148,6 +148,17 @@ try {
     $obsoletes = @('bgWorker', 'RunWorkerAsync', 'DEFAULT_XML_PATH', 'proxyUserBox', 'proxyPassBox', 'ProxyPassword')
     $trouves = @($obsoletes | Where-Object { ([regex]::Matches($src, $_)).Count -gt 0 })
     Check "aucun motif obsolete" ($trouves.Count -eq 0) ($trouves -join ", ")
+
+    # Fins de ligne : l'EXE embarque le script tel qu'il est sur le poste, en
+    # CRLF, et le controle compare des octets. Un clone en LF doit donc etre
+    # signale ici, avec sa cause, plutot que par un faux "RECOMPILER" plus bas.
+    $crlf = ([regex]::Matches($src, "`r`n")).Count
+    $lfSeul = ([regex]::Matches($src, "(?<!`r)`n")).Count
+    Check "script principal : fins de ligne CRLF (comme l'EXE embarque)" (($crlf -gt 0) -and ($lfSeul -eq 0)) ("CRLF=" + $crlf + " LF isole=" + $lfSeul + " - clone en LF plutot qu'une derive : obtenir un checkout CRLF (.gitattributes text eol=crlf) avant de conclure a une recompilation")
+    $attrPath = Join-Path $PSScriptRoot ".gitattributes"
+    $attr = if (Test-Path -LiteralPath $attrPath) { [System.IO.File]::ReadAllText($attrPath) } else { "" }
+    $declareCrlf = ($attr -match '(?m)^\s*\*\.ps1\s+text\s+eol=crlf\s*$')
+    Check "fins de ligne : .gitattributes impose CRLF aux .ps1" $declareCrlf ("declaration absente de .gitattributes : un clone avec core.autocrlf=false produirait un faux RECOMPILER (ajouter : *.ps1 text eol=crlf)")
     Write-Host ("         " + $lines.Count + " lignes, " + $src.Length + " octets")
 
     # L'EXE distribue embarque le script : son empreinte doit suivre le fichier .ps1.
@@ -177,7 +188,15 @@ try {
             $hExe = [System.BitConverter]::ToString($sha.ComputeHash($embarque)).Replace("-", "")
             $okExe = ($hExe -eq $hScript)
             $detail = if ($okExe) { "sha256=" + $hScript.Substring(0, 12) + " (" + $embarque.Length + " octets embarques)" }
-                      else { "L'EXE ne correspond plus au script (" + $hScript.Substring(0, 12) + " vs " + $hExe.Substring(0, 12) + ") - " + $recompiler }
+                      else {
+                          # Meme contenu, seules les fins de ligne changent : ce n'est pas une derive.
+                          $memeContenu = ((([System.Text.Encoding]::ASCII.GetString($embarque)) -replace "`r`n", "`n") -eq ($src -replace "`r`n", "`n"))
+                          if ($memeContenu) {
+                              "Contenu identique mais fins de ligne differentes (" + $embarque.Length + " octets embarques, script " + (Get-Item -LiteralPath $MainScript).Length + " octets) : le script est en LF ici, pas une derive - obtenir un checkout CRLF (.gitattributes, * text eol=crlf) et recompiler seulement si le contenu differe encore"
+                          } else {
+                              "L'EXE ne correspond plus au script (" + $hScript.Substring(0, 12) + " vs " + $hExe.Substring(0, 12) + ") - " + $recompiler
+                          }
+                      }
             Check "EXE a jour : empreinte du script embarque" $okExe $detail
         }
 

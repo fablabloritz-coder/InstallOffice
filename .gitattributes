@@ -1,3 +1,14 @@
+# Fins de ligne : le contrat du projet.
+#
+# L'EXE embarque le script du poste et le controle compare des octets (SHA-256) :
+# la copie de travail doit donc etre en CRLF partout, y compris sur un clone avec
+# core.autocrlf=false ou sous Linux. Sans cette declaration, un tel clone obtenait
+# du LF et la suite criait "RECOMPILER" alors que rien n'etait desynchronise.
+*.ps1 text eol=crlf
+
+# Le binaire livre n'est jamais converti.
+*.exe binary
+
 # Le hook et le workflow sont executes par sh / GitHub Actions : ils doivent
 # rester en LF meme sur un clone Windows avec core.autocrlf=true.
 .githooks/* text eol=lf
