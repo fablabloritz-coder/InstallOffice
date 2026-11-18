@@ -672,34 +672,61 @@ public class FakeAuthProxy
     $faux407.Stop()
 
     Section "8 ter. Reliquat de relais au demarrage"
-    # Un arret brutal laisse WinHTTP sur le relais loopback, port mort. On extrait
-    # les fonctions telles quelles : seul leur acces a netsh (Get-ProxyRelaySink)
-    # est remplace, et le test de port reste un vrai test de port sur la loopback.
+    # Un arret brutal laisse WinHTTP sur le relais loopback, port mort. Le port est
+    # enregistre au lancement du relais : la remise en acces direct n'est proposee que
+    # si WinHTTP pointe sur CE port, pour ne jamais toucher un proxy local legitime.
+    # Les fonctions sont extraites telles quelles ; seul l'acces a netsh
+    # (Get-ProxyRelaySink) est remplace, le test de port reste un vrai test TCP.
     Invoke-Expression (Get-FunctionText -Lines $lines -Name "Test-TcpPort")
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "Get-RelayMarkerPath")
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "Save-RelayPort")
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "Get-RelayPort")
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "Clear-RelayPort")
     Invoke-Expression (Get-FunctionText -Lines $lines -Name "Get-ProxyRelaySink")
     Invoke-Expression (Get-FunctionText -Lines $lines -Name "Get-WinHttpProxyAddress")
     Invoke-Expression (Get-FunctionText -Lines $lines -Name "Test-ProxyRelayResidue")
     Invoke-Expression (Get-FunctionText -Lines $lines -Name "Reset-WinHttpProxyResidue")
 
-    # Port libre releve puis referme : signature exacte d'un relais mort.
+    # Deux ports libres releves puis refermes : celui du relais et un autre.
     $sonde = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
     $sonde.Start()
     $portMort = $sonde.LocalEndpoint.Port
     $sonde.Stop()
+    $sonde2 = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    $sonde2.Start()
+    $portAutre = $sonde2.LocalEndpoint.Port
+    $sonde2.Stop()
     $sinkMort = @{ Show = { "Proxy Server(s) :  127.0.0.1:$portMort" } ; Reset = { "reinitialise" } }
-    $resMort = Test-ProxyRelayResidue -Sink $sinkMort -TimeoutMs 800
-    Check "reliquat proxy : relais loopback mort detecte" ($resMort.Found -and ($resMort.Host -eq "127.0.0.1") -and ($resMort.Port -eq $portMort)) ("found=" + $resMort.Found + " host=" + $resMort.Host + " port=" + $resMort.Port + " attendu=" + $portMort)
 
-    # Relais vivant ou acces direct : aucun signalement (pas de faux positif).
+    $resMort = Test-ProxyRelayResidue -Sink $sinkMort -RelayPort $portMort -TimeoutMs 800
+    Check "reliquat proxy : port enregistre et mort detecte" ($resMort.Found -and ($resMort.Host -eq "127.0.0.1") -and ($resMort.Port -eq $portMort)) ("found=" + $resMort.Found + " host=" + $resMort.Host + " port=" + $resMort.Port + " enregistre=" + $portMort)
+
+    # Port observe different du port enregistre : on ne touche a rien.
+    $resAutre = Test-ProxyRelayResidue -Sink $sinkMort -RelayPort $portAutre -TimeoutMs 800
+    Check "reliquat proxy : port different jamais signale" ((-not $resAutre.Found) -and ($resAutre.Port -eq $portMort) -and ($resAutre.Reason -eq "port different")) ("enregistre=" + $portAutre + " observe=" + $resAutre.Port + " -> found=" + $resAutre.Found + " raison=" + $resAutre.Reason)
+
+    # Aucun port enregistre : aucune proposition, meme devant un port mort.
+    $resSans = Test-ProxyRelayResidue -Sink $sinkMort -RelayPort 0 -TimeoutMs 500
+    Check "reliquat proxy : sans port enregistre, aucun signalement" (-not $resSans.Found) ("found=" + $resSans.Found + " raison=" + $resSans.Reason)
+
+    # Relais encore vivant, ou acces direct : aucun signalement non plus.
     $vivant = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
     $vivant.Start()
     $portVivant = $vivant.LocalEndpoint.Port
     $sinkVivant = @{ Show = { "Proxy Server(s) :  127.0.0.1:$portVivant" } ; Reset = { "" } }
-    $resVivant = Test-ProxyRelayResidue -Sink $sinkVivant -TimeoutMs 800
+    $resVivant = Test-ProxyRelayResidue -Sink $sinkVivant -RelayPort $portVivant -TimeoutMs 800
     $vivant.Stop()
     $sinkDirect = @{ Show = { "Acces direct (pas de serveur proxy)." } ; Reset = { "" } }
-    $resDirect = Test-ProxyRelayResidue -Sink $sinkDirect -TimeoutMs 500
+    $resDirect = Test-ProxyRelayResidue -Sink $sinkDirect -RelayPort $portMort -TimeoutMs 500
     Check "reliquat proxy : relais vivant ou acces direct non signale" ((-not $resVivant.Found) -and (-not $resDirect.Found)) ("vivant=" + $portVivant + " -> " + $resVivant.Found + " | direct -> " + $resDirect.Found)
+
+    # Le marqueur de port : ecrit au lancement, relu, puis efface.
+    $marqueur = Join-Path $Work "relay-port.txt"
+    Save-RelayPort -Port 4321 -Path $marqueur
+    $lu = Get-RelayPort -Path $marqueur
+    Clear-RelayPort -Path $marqueur
+    $apres = Get-RelayPort -Path $marqueur
+    Check "reliquat proxy : port du relais enregistre puis efface" (($lu -eq 4321) -and ($apres -eq 0) -and (-not (Test-Path -LiteralPath $marqueur))) ("relu=" + $lu + " apres effacement=" + $apres)
 
     # Noms propres a cette section : la section 9 reutilise $etat et $etatKo.
     $etatReinit = @{ Show = "Proxy Server(s) :  127.0.0.1:$portMort" }

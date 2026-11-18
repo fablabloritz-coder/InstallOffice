@@ -273,6 +273,43 @@ function Test-ProxyReadiness {
 #  avec le processus : Windows et Office n'ont plus d'acces reseau tant que
 #  personne ne s'en apercoit. On detecte ce cas au demarrage et on propose la
 #  remise en acces direct (netsh winhttp reset proxy).
+# Port du relais enregistre au lancement : sans lui, impossible de distinguer notre
+# relais d'un proxy local legitime. Le fichier vit a cote des journaux et ne contient
+# qu'un numero de port.
+function Get-RelayMarkerPath {
+    param([string]$Path)
+    if (-not [string]::IsNullOrWhiteSpace($Path)) { return $Path }
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")
+    $dir = if ($isAdmin) { $LOG_FOLDER } else { Join-Path $env:LOCALAPPDATA "Office2024Deploy" }
+    Join-Path $dir "relay-port.txt"
+}
+
+function Save-RelayPort {
+    param([int]$Port, [string]$Path)
+    try {
+        $f = Get-RelayMarkerPath -Path $Path
+        $d = Split-Path $f -Parent
+        if (-not [string]::IsNullOrWhiteSpace($d) -and -not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+        Set-Content -LiteralPath $f -Value ([string]$Port) -Encoding ASCII -Force
+    } catch {}
+}
+
+function Get-RelayPort {
+    param([string]$Path)
+    $f = Get-RelayMarkerPath -Path $Path
+    if (-not (Test-Path -LiteralPath $f)) { return 0 }
+    $t = ""
+    try { $t = ([string](Get-Content -LiteralPath $f -Raw)).Trim() } catch { return 0 }
+    $n = 0
+    if ([int]::TryParse($t, [ref]$n) -and $n -gt 0 -and $n -le 65535) { return $n }
+    return 0
+}
+
+function Clear-RelayPort {
+    param([string]$Path)
+    try { Remove-Item -LiteralPath (Get-RelayMarkerPath -Path $Path) -Force -ErrorAction SilentlyContinue } catch {}
+}
+
 function Get-ProxyRelaySink {
     @{ Show  = { @(& netsh winhttp show proxy 2>&1) -join "`n" }
        Reset = { @(& netsh winhttp reset proxy 2>&1) -join "`n" } }
@@ -289,12 +326,16 @@ function Get-WinHttpProxyAddress {
 }
 
 function Test-ProxyRelayResidue {
-    param($Sink, [int]$TimeoutMs = 1500)
+    param($Sink, [int]$RelayPort = 0, [int]$TimeoutMs = 1500)
     if ($null -eq $Sink) { $Sink = Get-ProxyRelaySink }
+    # Sans port enregistre, on ne sait pas reconnaitre notre relais : on ne propose rien.
+    if ($RelayPort -le 0) { return @{ Found = $false ; Host = "" ; Port = 0 ; Alive = $false ; Reason = "aucun port enregistre" } }
     $addr = Get-WinHttpProxyAddress -Sink $Sink
-    if ($null -eq $addr) { return @{ Found = $false ; Host = "" ; Port = 0 ; Alive = $false } }
+    if ($null -eq $addr) { return @{ Found = $false ; Host = "" ; Port = 0 ; Alive = $false ; Reason = "acces direct" } }
+    # Un autre proxy local (agent, antivirus, cache) ne doit jamais etre touche.
+    if ($addr.Port -ne $RelayPort) { return @{ Found = $false ; Host = $addr.Host ; Port = $addr.Port ; Alive = $false ; Reason = "port different" } }
     $alive = Test-TcpPort -Server $addr.Host -Port $addr.Port -TimeoutMs $TimeoutMs
-    @{ Found = (-not $alive) ; Host = $addr.Host ; Port = $addr.Port ; Alive = $alive }
+    @{ Found = (-not $alive) ; Host = $addr.Host ; Port = $addr.Port ; Alive = $alive ; Reason = $(if ($alive) { "relais vivant" } else { "relais mort" }) }
 }
 
 function Reset-WinHttpProxyResidue {
@@ -303,6 +344,15 @@ function Reset-WinHttpProxyResidue {
     $detail = [string](& $Sink.Reset)
     # Succes = plus aucune adresse loopback dans la configuration WinHTTP.
     @{ OK = ($null -eq (Get-WinHttpProxyAddress -Sink $Sink)) ; Detail = $detail.Trim() }
+}
+
+# Le marqueur n'est oublie que si WinHTTP ne pointe plus sur le relais : sinon il
+# sert au prochain demarrage a proposer la remise en acces direct.
+function Clear-RelayPortIfRestored {
+    $port = Get-RelayPort
+    if ($port -le 0) { return }
+    $addr = Get-WinHttpProxyAddress
+    if (($null -eq $addr) -or ($addr.Port -ne $port)) { Clear-RelayPort }
 }
 
 # --- Relais proxy local avec authentification (loopback) -------------------
@@ -1882,6 +1932,7 @@ $animTimer.Add_Tick({
             try { $dw.Runspace.Close(); $dw.Runspace.Dispose() } catch {}
             $script:deployWorkerContext = $null
             Stop-ProxyRelay
+            Clear-RelayPortIfRestored
         }
     }
 
@@ -3014,6 +3065,9 @@ function Start-Deployment {
         if ($chkUseProxy.Checked -and (-not $chkUseDepot.Checked) -and (-not [string]::IsNullOrWhiteSpace($proxyAuthUserBox.Text.Trim()))) {
             $via = Start-AuthenticatedProxy -ProxyHost $proxyHostCfg -ProxyPort $proxyPortCfg -User $proxyAuthUserBox.Text.Trim() -Password $proxyAuthPassBox.Text
             $proxyHostCfg = $via.Host ; $proxyPortCfg = $via.Port ; $proxyRelayCfg = $true ; $proxyTargetCfg = $via.Target
+            # Port enregistre : c'est lui qui autorisera, au prochain demarrage, a
+            # reconnaitre un reliquat si le processus est tue avant la restauration.
+            Save-RelayPort -Port ([int]$via.Port)
             $logBox.AppendText("[$(Get-Date -Format 'HH:mm:ss')]       Proxy authentifie : relais local $($via.Host):$($via.Port) -> $proxyTargetCfg (mot de passe non enregistre)`n")
             $logBox.ScrollToCaret()
         }
@@ -3105,6 +3159,7 @@ $form.Add_FormClosing({
         if ($r -eq "No") { $_.Cancel = $true ; return }
     }
     Stop-ProxyRelay
+    Clear-RelayPortIfRestored
     try {
         if ($script:deployWorkerContext) {
             try { $script:deployWorkerContext.PS.Stop() } catch {}
@@ -3123,8 +3178,12 @@ $form.Add_Shown({
     # Reliquat d'un deploiement interrompu : WinHTTP peut pointer sur le relais
     # loopback du programme, mort avec le processus. On le propose avant tout.
     try {
-        $residu = Test-ProxyRelayResidue
-        if ($residu.Found) {
+        # Seul le port enregistre au lancement du relais peut designer un reliquat :
+        # un proxy local legitime, meme loopback, n'est donc jamais touche.
+        $portRelais = Get-RelayPort
+        $residu = $null ; $fix = $null
+        if ($portRelais -gt 0) { $residu = Test-ProxyRelayResidue -RelayPort $portRelais }
+        if (($null -ne $residu) -and $residu.Found) {
             $txt = "La configuration proxy de Windows pointe vers $($residu.Host):$($residu.Port), un relais local qui ne repond plus.`n`nC'est le residu d'un deploiement interrompu : tant qu'il reste la, Windows et Office n'ont plus d'acces direct a Internet.`n`nRemettre Windows en acces direct (netsh winhttp reset proxy) ?"
             if ([System.Windows.Forms.MessageBox]::Show($txt, "Reliquat de proxy", "YesNo", [System.Windows.Forms.MessageBoxIcon]::Warning) -eq "Yes") {
                 $fix = Reset-WinHttpProxyResidue
@@ -3133,6 +3192,10 @@ $form.Add_Shown({
                 $ligne = "Reliquat conserve : proxy WinHTTP $($residu.Host):$($residu.Port) (port mort)."
             }
             $logBox.AppendText("[$(Get-Date -Format 'HH:mm:ss')]       $ligne`n") ; $logBox.ScrollToCaret()
+            if (($null -ne $fix) -and $fix.OK) { Clear-RelayPort }
+        } elseif (($null -ne $residu) -and ($residu.Reason -ne "relais vivant")) {
+            # WinHTTP ne pointe plus sur le relais : le marqueur est perime.
+            Clear-RelayPort
         }
     } catch {}
     Update-PreChecks | Out-Null
