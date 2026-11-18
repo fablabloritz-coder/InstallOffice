@@ -132,6 +132,36 @@ function Invoke-Deploy {
 
 function Solution { param($Res) (@($Res.Logs) | Where-Object { $_ -match 'Solution :' } | Select-Object -Last 1) }
 
+# Depot git jetable pret a tester le hook : fichiers copies, configuration fixee,
+# etat de reference commite. Les cas A, B et C partent tous d'ici.
+function New-HookRepo {
+    param(
+        [string]$Path,
+        [string[]]$Files,
+        [string[]]$Dossiers = @(),
+        [string]$Autocrlf = "false",
+        [scriptblock]$Avant = $null)
+    New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    foreach ($f in $Files) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot $f) -Destination $Path -Force
+    }
+    foreach ($d in $Dossiers) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot $d) -Destination $Path -Recurse -Force
+    }
+    # $Avant permet de preparer un etat non standard (script en LF) avant le commit.
+    if ($null -ne $Avant) { & $Avant $Path $PSScriptRoot }
+    $null = & git -C $Path init -q 2>&1
+    $null = & git -C $Path config core.autocrlf $Autocrlf
+    $null = & git -C $Path config core.eol native
+    $null = & git -C $Path config core.hooksPath .githooks
+    $null = & git -C $Path config commit.gpgsign false
+    $null = & git -C $Path config user.email "controle@example.invalid"
+    $null = & git -C $Path config user.name "Controle automatise"
+    $null = & git -C $Path add -A 2>&1
+    # --no-verify : sinon le hook du depot jetable relance la suite (recursion).
+    $null = & git -C $Path commit -q --no-verify -m "etat de reference" 2>&1
+}
+
 # ---------------------------------------------------------------- execution
 if (-not (Test-Path $MainScript)) { Write-Host ("Script principal introuvable : " + $MainScript) ; exit 2 }
 New-Item -ItemType Directory -Path $Work -Force | Out-Null
@@ -514,21 +544,9 @@ try {
         $avantTest = $env:INSTALLOFFICE_HOOKTEST
         New-Item -ItemType Directory -Path $depot -Force | Out-Null
         try {
-            foreach ($f in @("Install-Office2024-KMS.ps1", "Install-Office2024-KMS.exe", "Test-InstallOffice.ps1")) {
-                Copy-Item -LiteralPath (Join-Path $PSScriptRoot $f) -Destination $depot -Force
-            }
-            Copy-Item -LiteralPath (Join-Path $PSScriptRoot ".githooks") -Destination $depot -Recurse -Force
+            New-HookRepo -Path $depot -Autocrlf "false" -Dossiers @(".githooks") `
+                -Files @("Install-Office2024-KMS.ps1", "Install-Office2024-KMS.exe", "Test-InstallOffice.ps1")
             $scriptDepot = Join-Path $depot "Install-Office2024-KMS.ps1"
-
-            $null = & git -C $depot init -q 2>&1
-            $null = & git -C $depot config core.autocrlf false
-            $null = & git -C $depot config core.hooksPath .githooks
-            $null = & git -C $depot config commit.gpgsign false
-            $null = & git -C $depot config user.email "controle@example.invalid"
-            $null = & git -C $depot config user.name "Controle automatise"
-            $null = & git -C $depot add -A 2>&1
-            # --no-verify : sinon le hook de ce depot jetable relance la suite (recursion).
-            $null = & git -C $depot commit -q --no-verify -m "etat de reference" 2>&1
             $headHash = (Get-FileHash -LiteralPath $scriptDepot -Algorithm SHA256).Hash
 
             # Cas A : l'index derive, l'arbre de travail est propre.
@@ -595,28 +613,19 @@ try {
             # QUE .gitattributes : le hook doit quand meme se declencher, exporter
             # l'index sans conversion automatique, et refuser.
             $depotEol = Join-Path $Work "hookrepo_eol"
-            New-Item -ItemType Directory -Path $depotEol -Force | Out-Null
             $eapEol = $ErrorActionPreference
             # git add signale en stderr que LF sera converti en CRLF au prochain
             # checkout : ce n'est pas une erreur, et le harnais tourne en Stop.
             $ErrorActionPreference = "Continue"
             try {
-                foreach ($f in @("Install-Office2024-KMS.exe", "Test-InstallOffice.ps1", ".gitattributes")) {
-                    Copy-Item -LiteralPath (Join-Path $PSScriptRoot $f) -Destination $depotEol -Force
-                }
-                Copy-Item -LiteralPath (Join-Path $PSScriptRoot ".githooks") -Destination $depotEol -Recurse -Force
-                $scriptEol = Join-Path $depotEol "Install-Office2024-KMS.ps1"
-                $txtLf = ([System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "Install-Office2024-KMS.ps1"))) -replace "`r`n", "`n"
-                [System.IO.File]::WriteAllText($scriptEol, $txtLf, (New-Object System.Text.UTF8Encoding($false)))
-                $null = & git -C $depotEol init -q 2>&1
-                $null = & git -C $depotEol config core.autocrlf true
-                $null = & git -C $depotEol config core.eol native
-                $null = & git -C $depotEol config core.hooksPath .githooks
-                $null = & git -C $depotEol config commit.gpgsign false
-                $null = & git -C $depotEol config user.email "controle@example.invalid"
-                $null = & git -C $depotEol config user.name "Controle automatise"
-                $null = & git -C $depotEol add -A 2>&1
-                $null = & git -C $depotEol commit -q --no-verify -m "etat de reference" 2>&1
+                # Script ecrit en LF avant le commit, comme dans les blobs du depot.
+                New-HookRepo -Path $depotEol -Autocrlf "true" -Dossiers @(".githooks") `
+                    -Files @("Install-Office2024-KMS.exe", "Test-InstallOffice.ps1", ".gitattributes") `
+                    -Avant {
+                        param($p, $src)
+                        $txtLf = ([System.IO.File]::ReadAllText((Join-Path $src "Install-Office2024-KMS.ps1"))) -replace "`r`n", "`n"
+                        [System.IO.File]::WriteAllText((Join-Path $p "Install-Office2024-KMS.ps1"), $txtLf, (New-Object System.Text.UTF8Encoding($false)))
+                    }
                 # La regression : uniquement la declaration de fins de ligne.
                 $attrEol = Join-Path $depotEol ".gitattributes"
                 $garde = @([System.IO.File]::ReadAllLines($attrEol) | Where-Object { $_ -notmatch '^\s*\*\.ps1\s+text\s+eol=crlf\s*$' })
