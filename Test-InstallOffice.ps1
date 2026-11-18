@@ -634,8 +634,11 @@ try {
                 # par ligne, donc la comparaison suffit a prouver l'absence de CR.
                 $contenuLf = ([System.IO.File]::ReadAllText((Join-Path $depotEol "Install-Office2024-KMS.ps1"))) -replace "`r`n", "`n"
                 $attenduLf = [System.Text.Encoding]::ASCII.GetByteCount($contenuLf)
+                # Une fin de ligne CRLF pese un octet de plus qu'une fin LF : le
+                # nombre de lignes donne donc l'ecart, sans chiffre en dur.
+                $nbLignes = ([regex]::Matches($contenuLf, "`n")).Count
                 $tailleBlob = [int](& git -C $depotEol cat-file -s "HEAD:Install-Office2024-KMS.ps1")
-                Check "hook : cas C - script commite en LF (blob sans CR)" (($tailleBlob -gt 0) -and ($tailleBlob -eq $attenduLf)) ("blob=" + $tailleBlob + " octets, attendu LF=" + $attenduLf + " : un blob en CRLF peserait " + ($attenduLf + 2898) + " octets")
+                Check "hook : cas C - script commite en LF (blob sans CR)" (($tailleBlob -gt 0) -and ($tailleBlob -eq $attenduLf)) ("blob=" + $tailleBlob + " octets, attendu LF=" + $attenduLf + " : un blob en CRLF peserait " + ($attenduLf + $nbLignes) + " octets (" + $nbLignes + " lignes)")
                 # La regression : uniquement la declaration de fins de ligne.
                 $attrEol = Join-Path $depotEol ".gitattributes"
                 $garde = @([System.IO.File]::ReadAllLines($attrEol) | Where-Object { $_ -notmatch '^\s*\*\.ps1\s+text\s+eol=crlf\s*$' })
