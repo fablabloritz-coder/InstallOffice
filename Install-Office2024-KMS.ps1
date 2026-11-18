@@ -311,8 +311,22 @@ function Clear-RelayPort {
 }
 
 function Get-ProxyRelaySink {
+    # Deux couches sont relues : WinHTTP (machine) et le proxy de session (HKCU),
+    # tous deux laisses en place par un arret brutal.
+    $inetKey = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings"
     @{ Show  = { @(& netsh winhttp show proxy 2>&1) -join "`n" }
-       Reset = { @(& netsh winhttp reset proxy 2>&1) -join "`n" } }
+       Reset = { @(& netsh winhttp reset proxy 2>&1) -join "`n" }
+       ReadInet = {
+           $v = @{ ProxyEnable = 0 ; ProxyServer = "" ; ProxyOverride = "" }
+           foreach ($p in @("ProxyEnable","ProxyServer","ProxyOverride")) {
+               try { $v[$p] = Get-ItemPropertyValue -Path $inetKey -Name $p -ErrorAction Stop } catch {}
+           }
+           $v }.GetNewClosure()
+       DisableInet = {
+           try {
+               Set-ItemProperty -Path $inetKey -Name ProxyEnable -Value 0 -Type DWord -ErrorAction Stop
+               $true
+           } catch { $false } }.GetNewClosure() }
 }
 
 function Get-WinHttpProxyAddress {
@@ -325,25 +339,57 @@ function Get-WinHttpProxyAddress {
     return $null
 }
 
+function Get-InetProxyAddress {
+    param($Sink)
+    if ($null -eq $Sink) { $Sink = Get-ProxyRelaySink }
+    $inet = & $Sink.ReadInet
+    if ($null -eq $inet) { return $null }
+    # ProxyEnable=0 : Windows ignore ProxyServer, rien n'est casse.
+    if ([int]$inet.ProxyEnable -ne 1) { return $null }
+    $m = [regex]::Match([string]$inet.ProxyServer, '(?i)(127\.0\.0\.1|localhost)\s*:\s*(\d{1,5})')
+    if ($m.Success) { return @{ Host = $m.Groups[1].Value ; Port = [int]$m.Groups[2].Value } }
+    return $null
+}
+
 function Test-ProxyRelayResidue {
     param($Sink, [int]$RelayPort = 0, [int]$TimeoutMs = 1500)
     if ($null -eq $Sink) { $Sink = Get-ProxyRelaySink }
+    $res = @{ Found = $false ; Host = "" ; Port = 0 ; Alive = $false ; Reason = "" ; WinHttp = $false ; WinInet = $false }
     # Sans port enregistre, on ne sait pas reconnaitre notre relais : on ne propose rien.
-    if ($RelayPort -le 0) { return @{ Found = $false ; Host = "" ; Port = 0 ; Alive = $false ; Reason = "aucun port enregistre" } }
-    $addr = Get-WinHttpProxyAddress -Sink $Sink
-    if ($null -eq $addr) { return @{ Found = $false ; Host = "" ; Port = 0 ; Alive = $false ; Reason = "acces direct" } }
-    # Un autre proxy local (agent, antivirus, cache) ne doit jamais etre touche.
-    if ($addr.Port -ne $RelayPort) { return @{ Found = $false ; Host = $addr.Host ; Port = $addr.Port ; Alive = $false ; Reason = "port different" } }
-    $alive = Test-TcpPort -Server $addr.Host -Port $addr.Port -TimeoutMs $TimeoutMs
-    @{ Found = (-not $alive) ; Host = $addr.Host ; Port = $addr.Port ; Alive = $alive ; Reason = $(if ($alive) { "relais vivant" } else { "relais mort" }) }
+    if ($RelayPort -le 0) { $res.Reason = "aucun port enregistre" ; return $res }
+    $h = Get-WinHttpProxyAddress -Sink $Sink      # machine
+    $i = Get-InetProxyAddress -Sink $Sink         # session (navigateur)
+    $res.WinHttp = (($null -ne $h) -and ($h.Port -eq $RelayPort))
+    $res.WinInet = (($null -ne $i) -and ($i.Port -eq $RelayPort))
+    if (-not ($res.WinHttp -or $res.WinInet)) {
+        if (($null -eq $h) -and ($null -eq $i)) { $res.Reason = "acces direct" }
+        else {
+            # Un autre proxy local (agent, antivirus, cache) ne doit jamais etre touche.
+            $vu = if ($null -ne $h) { $h } else { $i }
+            $res.Host = $vu.Host ; $res.Port = $vu.Port ; $res.Reason = "port different"
+        }
+        return $res
+    }
+    $cible = if ($res.WinHttp) { $h } else { $i }
+    $alive = Test-TcpPort -Server $cible.Host -Port $cible.Port -TimeoutMs $TimeoutMs
+    $res.Host = $cible.Host ; $res.Port = $cible.Port ; $res.Alive = $alive
+    $res.Found = (-not $alive)
+    $res.Reason = $(if ($alive) { "relais vivant" } else { "relais mort" })
+    $res
 }
 
-function Reset-WinHttpProxyResidue {
-    param($Sink)
+# Remise en direct des seules couches en cause. Succes = ces couches ne pointent plus
+# sur une adresse loopback ; une couche laissee de cote n'entre pas dans le verdict.
+function Reset-ProxyRelayResidue {
+    param($Sink, [bool]$WinHttp = $true, [bool]$WinInet = $true)
     if ($null -eq $Sink) { $Sink = Get-ProxyRelaySink }
-    $detail = [string](& $Sink.Reset)
-    # Succes = plus aucune adresse loopback dans la configuration WinHTTP.
-    @{ OK = ($null -eq (Get-WinHttpProxyAddress -Sink $Sink)) ; Detail = $detail.Trim() }
+    $detail = ""
+    if ($WinHttp) { $detail = [string](& $Sink.Reset) }
+    if ($WinInet) { $null = & $Sink.DisableInet }
+    $ok = $true
+    if ($WinHttp) { $ok = $ok -and ($null -eq (Get-WinHttpProxyAddress -Sink $Sink)) }
+    if ($WinInet) { $ok = $ok -and ($null -eq (Get-InetProxyAddress -Sink $Sink)) }
+    @{ OK = $ok ; Detail = $detail.Trim() }
 }
 
 # Le marqueur n'est oublie que si WinHTTP ne pointe plus sur le relais : sinon il
@@ -351,8 +397,10 @@ function Reset-WinHttpProxyResidue {
 function Clear-RelayPortIfRestored {
     $port = Get-RelayPort
     if ($port -le 0) { return }
-    $addr = Get-WinHttpProxyAddress
-    if (($null -eq $addr) -or ($addr.Port -ne $port)) { Clear-RelayPort }
+    $h = Get-WinHttpProxyAddress
+    $i = Get-InetProxyAddress
+    $encore = ((($null -ne $h) -and ($h.Port -eq $port)) -or (($null -ne $i) -and ($i.Port -eq $port)))
+    if (-not $encore) { Clear-RelayPort }
 }
 
 # --- Relais proxy local avec authentification (loopback) -------------------
@@ -3184,12 +3232,15 @@ $form.Add_Shown({
         $residu = $null ; $fix = $null
         if ($portRelais -gt 0) { $residu = Test-ProxyRelayResidue -RelayPort $portRelais }
         if (($null -ne $residu) -and $residu.Found) {
-            $txt = "La configuration proxy de Windows pointe vers $($residu.Host):$($residu.Port), un relais local qui ne repond plus.`n`nC'est le residu d'un deploiement interrompu : tant qu'il reste la, Windows et Office n'ont plus d'acces direct a Internet.`n`nRemettre Windows en acces direct (netsh winhttp reset proxy) ?"
+            $couches = @()
+            if ($residu.WinHttp) { $couches += "Windows (WinHTTP)" }
+            if ($residu.WinInet) { $couches += "session (navigateur)" }
+            $txt = "La configuration proxy de $($couches -join ' et ') pointe vers $($residu.Host):$($residu.Port), un relais local qui ne repond plus.`n`nC'est le residu d'un deploiement interrompu : tant qu'il reste la, Windows et Internet n'ont plus d'acces direct.`n`nRemettre Windows et la session en acces direct ?"
             if ([System.Windows.Forms.MessageBox]::Show($txt, "Reliquat de proxy", "YesNo", [System.Windows.Forms.MessageBoxIcon]::Warning) -eq "Yes") {
-                $fix = Reset-WinHttpProxyResidue
-                $ligne = if ($fix.OK) { "Reliquat supprime : Windows est de nouveau en acces direct." } else { "Remise en acces direct impossible : $($fix.Detail)" }
+                $fix = Reset-ProxyRelayResidue -WinHttp ([bool]$residu.WinHttp) -WinInet ([bool]$residu.WinInet)
+                $ligne = if ($fix.OK) { "Reliquat supprime : acces direct retabli ($($couches -join ', '))." } else { "Remise en acces direct incomplete : $($fix.Detail)" }
             } else {
-                $ligne = "Reliquat conserve : proxy WinHTTP $($residu.Host):$($residu.Port) (port mort)."
+                $ligne = "Reliquat conserve : proxy $($residu.Host):$($residu.Port) (port mort) sur $($couches -join ', ')."
             }
             $logBox.AppendText("[$(Get-Date -Format 'HH:mm:ss')]       $ligne`n") ; $logBox.ScrollToCaret()
             if (($null -ne $fix) -and $fix.OK) { Clear-RelayPort }
