@@ -13,7 +13,7 @@ d'un réseau pédagogique.
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
 | `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (72 cas, `-Fast` pour la section 1 seule) |
 | `.githooks/pre-commit` | Contrôle rapide de l'index avant chaque commit, refuse l'EXE désynchronisé |
-| `.github/workflows/controle-exe.yml` | Même contrôle sur GitHub Actions (push sur `main`, pull request) |
+| `.github/workflows/controle-exe.yml` | Suite complète + contrat de fins de ligne (checkout sans conversion) sur GitHub Actions, à chaque push sur `main` et à chaque pull request |
 | `setup.exe` | Office Deployment Tool — **non versionné**, à récupérer (voir ci-dessous) |
 
 ## Prérequis
@@ -158,6 +158,11 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   **complète** (72 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
   request : un EXE oublié ou compilé autrement fait échouer la vérification côté serveur,
   même si le hook local n'était pas installé — et sans rien imposer à la boucle locale.
+- **le contrat de fins de ligne y est vérifié aussi** : un second job refait un checkout
+  avec `core.autocrlf=false` et `core.eol=lf`, puis lance le contrôle rapide. Sans la
+  déclaration `*.ps1 text eol=crlf`, il recevrait des `.ps1` en LF et échouerait ; le run
+  publie les octets réellement reçus, donc un faux « RECOMPILER » ne peut plus passer
+  inaperçu sur un poste donné pour la seule raison qu'il a le bon réglage local.
 
 ## Limites connues
 

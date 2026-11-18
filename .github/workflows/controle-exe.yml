@@ -35,3 +35,48 @@ jobs:
           if ($code -ne 0) {
             throw "Test-InstallOffice.ps1 a echoue (code $code) : EXE desynchronise ou mal compile."
           }
+
+  fins-de-ligne:
+    name: Contrat de fins de ligne (core.autocrlf=false)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+        with:
+          path: verif
+
+      # Sans conversion automatique, seuls les attributs de .gitattributes peuvent
+      # produire du CRLF. Si la declaration *.ps1 text eol=crlf disparait, ce job
+      # recoit des .ps1 en LF et le controle rapide echoue : c'est exactement ce
+      # qu'on veut verifier a chaque push, et pas seulement sur un poste.
+      - name: Reextraire les fichiers sans conversion implicite
+        shell: bash
+        working-directory: verif
+        run: |
+          git config core.autocrlf false
+          git config core.eol lf
+          rm -f Install-Office2024-KMS.ps1 Test-InstallOffice.ps1 README.md
+          git checkout -- .
+
+      - name: Mesurer les fins de ligne recues
+        shell: powershell
+        working-directory: verif
+        run: |
+          foreach ($f in @("Install-Office2024-KMS.ps1", "Test-InstallOffice.ps1")) {
+            $b = [System.IO.File]::ReadAllBytes((Join-Path (Get-Location) $f))
+            $cr = 0
+            foreach ($x in $b) { if ($x -eq 13) { $cr++ } }
+            "$f : $($b.Length) octets, $cr CR"
+          }
+
+      - name: Controle rapide sur ces fichiers
+        shell: powershell
+        working-directory: verif
+        run: |
+          $ErrorActionPreference = 'Continue'
+          & powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps1 -Fast
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            throw "Controle rapide en echec (code $code) sur un checkout sans conversion : .gitattributes doit declarer *.ps1 text eol=crlf."
+          }
