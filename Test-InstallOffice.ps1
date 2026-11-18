@@ -633,9 +633,13 @@ public class FakeAuthProxy
         $s = $c.GetStream()
         $req = [System.Text.Encoding]::ASCII.GetBytes("CONNECT $Cible HTTP/1.1`r`nHost: $Cible`r`n`r`n")
         $s.Write($req, 0, $req.Length) ; $s.Flush()
-        @{ Client = $c ; Stream = $s ; Reponse = (Read-EnteteProxy $s) }
+        # Un CONNECT abouti compte : c'est la reference du nombre de tunnels dus.
+        $rep = Read-EnteteProxy $s
+        if ($rep -match ' 200 ') { $script:ConnectOk++ }
+        @{ Client = $c ; Stream = $s ; Reponse = $rep }
     }
 
+    $script:ConnectOk = 0
     $fauxAmont = New-Object FakeAuthProxy -ArgumentList @("eleve", "secret")
     $fauxAmont.Start()
     $relais = Start-ProxyRelay -UpstreamHost "127.0.0.1" -UpstreamPort $fauxAmont.Port -User "eleve" -Password "secret"
@@ -649,9 +653,10 @@ public class FakeAuthProxy
         try { $n = $c1.Stream.Read($buf, 0, $buf.Length) } catch {}
         if ($n -gt 0) { $echange = [System.Text.Encoding]::ASCII.GetString($buf, 0, $n) }
     }
-    # Tunnels : au moins un, sans figer le total (une reconnaissance supplementaire du
-    # relais ne doit pas faire echouer le controle du tunnel).
-    Check "relais proxy : CONNECT authentifie et tunnel bidirectionnel" (($c1.Reponse -match ' 200 ') -and ($echange -eq "ping-relais") -and ($fauxAmont.Tunnels -ge 1)) (("reponse=" + ($c1.Reponse -replace "\s+", " ") + " echo=[" + $echange + "] tunnels=" + $fauxAmont.Tunnels))
+    # Les tunnels ouverts chez le proxy amont doivent egaler les CONNECT que le harnais
+    # a vus aboutir (200) : une fuite (tunnel ouvert sans reponse au client, ou tunnel
+    # en double) se voit, sans figer de total en dur. Le plancher evite le cas 0 = 0.
+    Check "relais proxy : CONNECT authentifie et tunnel bidirectionnel" (($c1.Reponse -match ' 200 ') -and ($echange -eq "ping-relais") -and ($script:ConnectOk -ge 1) -and ($fauxAmont.Tunnels -eq $script:ConnectOk)) (("reponse=" + ($c1.Reponse -replace "\s+", " ") + " echo=[" + $echange + "] tunnels=" + $fauxAmont.Tunnels + " connect_ok=" + $script:ConnectOk))
     try { $c1.Client.Close() } catch {}
 
     $relaisKo = Start-ProxyRelay -UpstreamHost "127.0.0.1" -UpstreamPort $fauxAmont.Port -User "eleve" -Password "faux"
