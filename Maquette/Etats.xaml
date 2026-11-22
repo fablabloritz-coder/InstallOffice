@@ -135,7 +135,7 @@
                 Style="{StaticResource BoutonPrimaire}" HorizontalAlignment="Center"
                 Margin="4,0,4,10"/>
 
-        <!-- Barre de titre : pas de focus, les glyphes sont colles et rognes par la barre -->
+        <!-- Barre de titre : glyphes colles, anneau de focus a l'interieur du bouton -->
         <TextBlock Grid.Row="5" Text="Barre de titre" Style="{StaticResource Etiquette}"
                    Margin="0,0,0,10"/>
         <Button Grid.Row="5" Grid.Column="1" x:Name="Fen_Repos" Content="&#xE921;"
@@ -145,6 +145,9 @@
                 Style="{StaticResource BoutonFenetre}" HorizontalAlignment="Center"
                 Margin="4,0,4,10"/>
         <Button Grid.Row="5" Grid.Column="3" x:Name="Fen_Appui" Content="&#xE921;"
+                Style="{StaticResource BoutonFenetre}" HorizontalAlignment="Center"
+                Margin="4,0,4,10"/>
+        <Button Grid.Row="5" Grid.Column="4" x:Name="Fen_Focus" Content="&#xE921;"
                 Style="{StaticResource BoutonFenetre}" HorizontalAlignment="Center"
                 Margin="4,0,4,10"/>
         <Button Grid.Row="5" Grid.Column="5" x:Name="Fen_Off" Content="&#xE921;"
@@ -234,8 +237,9 @@
           le primaire reste bleu foncé (#115EA3) : son déclencheur l'emporte sur le gris hérité du
           secondaire. Le bouton de dialogue garde un texte noir. Au focus clavier, tous les boutons
           affichent un anneau d'accent hors du cadre, le champ prend une bordure accent, et la case
-          comme le radio ajoutent ce même anneau. Le radio se grise désormais une fois désactivé ; la
-          barre de titre n'a que le survol, ses glyphes collés étant rognés par la barre.</TextBlock>
+          comme le radio ajoutent ce même anneau. Le radio se grise désormais une fois désactivé. Les
+          glyphes de barre de titre, collés les uns aux autres, portent leur anneau à l'intérieur du
+          bouton, faute de place autour.</TextBlock>
       </Border>
     </StackPanel>
   </Border>

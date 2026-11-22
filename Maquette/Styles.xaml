@@ -111,12 +111,22 @@
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
-          <Border x:Name="bd" Background="{TemplateBinding Background}">
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-          </Border>
+          <Grid>
+            <Border x:Name="bd" Background="{TemplateBinding Background}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <!-- Anneau de focus a l'interieur du bouton, contrairement aux autres
+                 boutons : les glyphes se touchent dans la barre de titre, et un
+                 anneau en debord passerait sous le voisin ou hors de la barre. -->
+            <Border x:Name="anneau" Margin="1" CornerRadius="3" BorderThickness="2"
+                    BorderBrush="{StaticResource Accent}" Visibility="Collapsed"/>
+          </Grid>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="bd" Property="Background" Value="#E9E9E9"/>
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="anneau" Property="Visibility" Value="Visible"/>
             </Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
