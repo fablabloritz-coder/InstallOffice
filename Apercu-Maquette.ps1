@@ -326,6 +326,7 @@ $tablePlanche = @(
     @{ Nom = "DlgPri" ; Survol = "IsMouseOver" ; Appui = "IsMouseOver,IsPressed" ; Focus = "IsKeyboardFocused"    ; Off = $desactive }
     @{ Nom = "Fen"    ; Survol = "IsMouseOver" ; Appui = "IsMouseOver,IsPressed" ; Focus = "IsKeyboardFocused" ; Off = $desactive }
     @{ Nom = "Sai"    ; Survol = "IsMouseOver" ; Focus = "IsKeyboardFocusWithin" ; Off = $desactive }
+    @{ Nom = "Secr"   ; Survol = "IsMouseOver" ; Focus = "IsKeyboardFocusWithin" ; Off = $desactive }
     @{ Nom = "Chk"    ; Survol = "IsMouseOver" ; Focus = "IsKeyboardFocused"      ; Off = $desactive }
     @{ Nom = "ChkC"   ; Survol = "IsMouseOver" ; Focus = "IsKeyboardFocused"      ; Off = $desactive }
     @{ Nom = "Opt"    ; Survol = "IsMouseOver" ; Focus = "IsKeyboardFocused"      ; Off = $desactive }
@@ -423,7 +424,7 @@ if ($Capture -ne "") {
     } elseif ($Etats) {
         $planche = Import-Xaml "Etats.xaml"
         Set-PlancheEtats $planche
-        Export-Visuel $planche $Capture 1216 595
+        Export-Visuel $planche $Capture 1216 641
     } else {
         $win = Import-Xaml "Principal.xaml"
         for ($k = 0; $k -le $Etape; $k++) { Set-Scene $win $k }
