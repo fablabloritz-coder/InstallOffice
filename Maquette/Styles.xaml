@@ -125,6 +125,11 @@
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="bd" Property="Background" Value="#E9E9E9"/>
             </Trigger>
+            <!-- Pose apres le survol, donc prioritaire : sans lui l'appui rendait
+                 le meme gris que le survol et la cellule Fen_Appui ne montrait rien. -->
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="#DDDDDD"/>
+            </Trigger>
             <Trigger Property="IsKeyboardFocused" Value="True">
               <Setter TargetName="anneau" Property="Visibility" Value="Visible"/>
             </Trigger>
