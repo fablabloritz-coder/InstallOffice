@@ -16,12 +16,15 @@
 #    ... -Applications                   (ouvre directement les applications)
 #    ... -Capture C:\tmp\ecran.png       (rend l'ecran en PNG et sort)
 #    ... -Capture ... -Etape 6           (etat simule : index du scenario)
+#    ... -Etats                         (planche des etats de boutons)
+#    ... -Capture ... -Etats             (rend la planche en PNG)
 #    ... -Capture ... -Dialogue | -Applications
 # ================================================================
 param(
     [string]$Capture = "",
     [switch]$Dialogue,
     [switch]$Applications,
+    [switch]$Etats,
     [int]$Etape = 7
 )
 
@@ -65,7 +68,7 @@ function Get-Pinceau {
 
 # Etats d'une etape : fond de la puce, couleur du glyphe, glyphe des etats finis.
 # Le libelle accentue est porte par le XAML (cle Etat<Etat>), le script reste ASCII.
-$etats = @{
+$renduEtapes = @{
     attente = @{ Fond = "#EDEDED" ; Texte = "#8A8A8A" }
     encours = @{ Fond = "#0F6CBD" ; Texte = "#FFFFFF" }
     termine = @{ Fond = "#DFF6DD" ; Texte = "#0F7B0F" }
@@ -78,7 +81,7 @@ $glyphes = @{
 
 function Set-Etape {
     param($Fenetre, [int]$Index, [string]$Etat)
-    $e = $etats[$Etat]
+    $e = $renduEtapes[$Etat]
     $puce   = $Fenetre.FindName("Etape$Index")
     $glyphe = $Fenetre.FindName("Glyphe$Index")
     $titre  = $Fenetre.FindName("Titre$Index")
@@ -252,12 +255,35 @@ function Show-Applications {
     $script:dlgApps = $null
 }
 
+# IsMouseOver et IsPressed sont des proprietes en lecture seule, exposees avec leur
+# cle : les forcer fait evaluer les vrais declencheurs des styles partages.
+$drapeauxStatiques = [System.Reflection.BindingFlags]"NonPublic,Public,Static"
+$clesEtats = @{
+    survol = [System.Windows.UIElement].GetField("IsMouseOverPropertyKey", $drapeauxStatiques).GetValue($null)
+    appui  = [System.Windows.Controls.Primitives.ButtonBase].GetField("IsPressedPropertyKey", $drapeauxStatiques).GetValue($null)
+}
+
+function Set-PlancheEtats {
+    param($Fenetre)
+    foreach ($v in @("Sec", "Pri", "DlgSec", "DlgPri", "Fen")) {
+        $Fenetre.FindName("${v}_Survol").SetValue($clesEtats.survol, $true)
+        $appui = $Fenetre.FindName("${v}_Appui")
+        $appui.SetValue($clesEtats.survol, $true)
+        $appui.SetValue($clesEtats.appui, $true)
+        $Fenetre.FindName("${v}_Off").IsEnabled = $false
+    }
+}
+
 # --- Mode capture : rendu hors ecran, aucun affichage ----------------------
 if ($Capture -ne "") {
     if ($Dialogue) {
         Export-Visuel (Import-Xaml "ReliquatProxy.xaml") $Capture 560 392
     } elseif ($Applications) {
         Export-Visuel (Import-Xaml "Applications.xaml") $Capture 620 560
+    } elseif ($Etats) {
+        $planche = Import-Xaml "Etats.xaml"
+        Set-PlancheEtats $planche
+        Export-Visuel $planche $Capture 980 448
     } else {
         $win = Import-Xaml "Principal.xaml"
         for ($k = 0; $k -le $Etape; $k++) { Set-Scene $win $k }
@@ -268,6 +294,13 @@ if ($Capture -ne "") {
 }
 
 # --- Mode interactif -------------------------------------------------------
+if ($Etats) {
+    $planche = Import-Xaml "Etats.xaml"
+    Set-PlancheEtats $planche
+    [void]$planche.ShowDialog()
+    return
+}
+
 $script:fenetre = Import-Xaml "Principal.xaml"
 $win = $script:fenetre
 $win.Add_MouseLeftButtonDown({ try { $win.DragMove() } catch {} })
