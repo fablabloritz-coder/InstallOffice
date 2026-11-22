@@ -207,17 +207,16 @@ function Export-Visuel {
 }
 
 function Get-TaillePlanche {
-    # La hauteur de la planche n'est pas ecrite : elle suit le nombre de lignes.
-    # Les colonnes de la grille etant proportionnelles, il faut une largeur, et
-    # elle vient de la fenetre (Width dans Etats.xaml) : aucun chiffre ici.
+    # La hauteur suit le nombre de lignes ; les colonnes de la grille etant
+    # proportionnelles, la largeur vient de la fenetre (Width dans Etats.xaml).
+    # Arrondi au pixel superieur : une fraction de pixel de plus rognerait le bas.
     param($Fenetre)
-    $largeur = $Fenetre.Width
-    if ([double]::IsNaN($largeur)) {
-        throw "Planche sans largeur : Etats.xaml doit declarer Width, faute de quoi les colonnes proportionnelles ne peuvent pas se repartir."
+    if ([double]::IsNaN($Fenetre.Width)) {
+        throw "Planche sans largeur : Etats.xaml doit declarer Width (colonnes proportionnelles)."
     }
-    $l = [int][Math]::Ceiling($largeur)
-    $Fenetre.Content.Measure((New-Object System.Windows.Size($l, [double]::PositiveInfinity)))
-    return @{ Largeur = $l ; Hauteur = [int][Math]::Ceiling($Fenetre.Content.DesiredSize.Height) }
+    $largeur = [int][Math]::Ceiling($Fenetre.Width)
+    $Fenetre.Content.Measure((New-Object System.Windows.Size($largeur, [double]::PositiveInfinity)))
+    return (New-Object System.Windows.Size($largeur, [int][Math]::Ceiling($Fenetre.Content.DesiredSize.Height)))
 }
 
 function Show-Reliquat {
@@ -439,7 +438,7 @@ if ($Capture -ne "") {
         $planche = Import-Xaml "Etats.xaml"
         Set-PlancheEtats $planche
         $taille = Get-TaillePlanche $planche
-        Export-Visuel $planche $Capture $taille.Largeur $taille.Hauteur
+        Export-Visuel $planche $Capture $taille.Width $taille.Height
     } else {
         $win = Import-Xaml "Principal.xaml"
         for ($k = 0; $k -le $Etape; $k++) { Set-Scene $win $k }
