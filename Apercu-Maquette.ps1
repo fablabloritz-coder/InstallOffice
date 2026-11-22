@@ -1,33 +1,50 @@
 # ================================================================
 #  Apercu de la maquette XAML (style Fluent Windows 11)
 # ================================================================
-#  Charge Maquette/Principal.xaml et Maquette/ReliquatProxy.xaml avec
-#  XamlReader - exactement le mecanisme qu'utiliserait le script de
-#  production - et les anime avec des donnees simulees.
+#  Charge les XAML de Maquette/ avec XamlReader - exactement le mecanisme
+#  qu'utiliserait le script de production - et les anime avec des donnees
+#  simulees. Le formulaire reprend les options du script : setup.exe, langue,
+#  depot de sources, XML et applications, KMS (principal, secours, cle produit),
+#  proxy (adresse, port, identifiants, exceptions).
 #
 #  Aucun acces reseau, aucune ecriture sur le poste, aucune activation :
 #  cet apercu ne touche ni au moteur ni aux controles.
 #
 #  Usage :
 #    powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Apercu-Maquette.ps1
-#    ... -Dialogue                       (ouvre directement le dialogue)
+#    ... -Dialogue                       (ouvre directement le reliquat de proxy)
+#    ... -Applications                   (ouvre directement les applications)
 #    ... -Capture C:\tmp\ecran.png       (rend l'ecran en PNG et sort)
 #    ... -Capture ... -Etape 6           (etat simule : index du scenario)
-#    ... -Capture ... -Dialogue          (rend le dialogue en PNG)
+#    ... -Capture ... -Dialogue | -Applications
 # ================================================================
 param(
     [string]$Capture = "",
     [switch]$Dialogue,
-    [int]$Etape = 6
+    [switch]$Applications,
+    [int]$Etape = 7
 )
 
 Add-Type -AssemblyName PresentationFramework
+Add-Type -AssemblyName System.Windows.Forms
 
 $ici      = Split-Path -Parent $MyInvocation.MyCommand.Path
 $dossier  = Join-Path $ici "Maquette"
 $pinceaux = New-Object System.Windows.Media.BrushConverter
 $policeTexte = New-Object System.Windows.Media.FontFamily("Segoe UI Variable Text, Segoe UI")
 $policeIcone = New-Object System.Windows.Media.FontFamily("Segoe MDL2 Assets, Segoe UI")
+
+$APPS = @(
+    @{ Nom = "Word" ; Cle = "AppWord" ; Libelle = "Word" }
+    @{ Nom = "Excel" ; Cle = "AppExcel" ; Libelle = "Excel" }
+    @{ Nom = "PowerPoint" ; Cle = "AppPowerPoint" ; Libelle = "PowerPoint" }
+    @{ Nom = "Outlook" ; Cle = "AppOutlook" ; Libelle = "Outlook" }
+    @{ Nom = "OneNote" ; Cle = "AppOneNote" ; Libelle = "OneNote" }
+    @{ Nom = "Access" ; Cle = "AppAccess" ; Libelle = "Access" }
+    @{ Nom = "Teams" ; Cle = "AppTeams" ; Libelle = "Teams" }
+    @{ Nom = "OneDrive" ; Cle = "AppOneDrive" ; Libelle = "OneDrive" }
+    @{ Nom = "Lync" ; Cle = "AppLync" ; Libelle = "Skype Entreprise" }
+)
 
 function Import-Xaml {
     param([string]$Nom)
@@ -97,6 +114,27 @@ function Add-Journal {
     $ligne.Text = ("{0}  {1}" -f (Get-Date).ToString("HH:mm:ss"), $Texte)
     [void]$Fenetre.FindName("Journal").Children.Add($ligne)
     $Fenetre.FindName("Defilement").ScrollToEnd()
+}
+
+function Set-Actif {
+    param($Fenetre, [string[]]$Noms, [bool]$Actif)
+    foreach ($n in $Noms) { $Fenetre.FindName($n).IsEnabled = $Actif }
+}
+
+# Regle de l'ecran : un depot de sources supprime le telechargement, donc le proxy.
+function Update-Options {
+    param($Fenetre)
+    $depot = [bool]$Fenetre.FindName("ChkDepot").IsChecked
+    Set-Actif $Fenetre @("ChampDepot", "BtnDepot") $depot
+    $Fenetre.FindName("ChkProxy").IsEnabled = -not $depot
+    $proxy = (-not $depot) -and [bool]$Fenetre.FindName("ChkProxy").IsChecked
+    Set-Actif $Fenetre @("ChampProxy", "ChampPort", "ChampProxyUser", "ChampProxyPass", "ChampBypass", "BtnTestProxy") $proxy
+    $kms = [bool]$Fenetre.FindName("ChkKms").IsChecked
+    Set-Actif $Fenetre @("ChampKms", "ChampKmsSecours", "BtnTestKms") $kms
+    Set-Actif $Fenetre @("ChampCle") ([bool]$Fenetre.FindName("ChkCle").IsChecked)
+    $auto = [bool]$Fenetre.FindName("RadXmlAuto").IsChecked
+    Set-Actif $Fenetre @("BtnApps", "LblApps") $auto
+    Set-Actif $Fenetre @("ChampXml", "BtnXml") (-not $auto)
 }
 
 # Scenario simule. Chaque scene ne porte que ce qu'elle change : les etapes qui
@@ -175,14 +213,50 @@ function Show-Reliquat {
     $script:dlgReliquat = $null
 }
 
+# Exclues selon les cases du dialogue des applications (6 incluses, 3 exclues au depart).
+function Get-ApplicationsExclues {
+    param($Dlg)
+    $exclues = @()
+    foreach ($a in $APPS) {
+        if (-not $Dlg.FindName($a.Cle).IsChecked) { $exclues += $a.Libelle }
+    }
+    return $exclues
+}
+
+function Show-Applications {
+    param($Fenetre)
+    $dlg = Import-Xaml "Applications.xaml"
+    $script:dlgApps = $dlg
+    $dlg.Owner = $Fenetre
+    $maj = {
+        $exclues = @(Get-ApplicationsExclues $script:dlgApps)
+        $dlg2 = $script:dlgApps
+        $dlg2.FindName("ResumeApps").Text = ("{0} applications incluses, {1} exclues" -f ($APPS.Count - $exclues.Count), $exclues.Count)
+    }
+    foreach ($a in $APPS) { $dlg.FindName($a.Cle).Add_Click($maj) }
+    & $maj
+    $dlg.FindName("BtnAppliquer").Add_Click({
+        $exclues = @(Get-ApplicationsExclues $script:dlgApps)
+        $texte = if ($exclues.Count -eq 0) { "Toutes les applications incluses" } else { "Exclues : " + ($exclues -join ", ") }
+        $script:fenetre.FindName("LblApps").Text = $texte
+        Add-Journal $script:fenetre "info" ("Applications retenues - " + $(if ($exclues.Count -eq 0) { "aucune exclusion" } else { "exclues : " + ($exclues -join ", ") }))
+        $script:dlgApps.DialogResult = $true
+    })
+    $dlg.FindName("BtnAnnuler").Add_Click({ $script:dlgApps.DialogResult = $false })
+    [void]$dlg.ShowDialog()
+    $script:dlgApps = $null
+}
+
 # --- Mode capture : rendu hors ecran, aucun affichage ----------------------
 if ($Capture -ne "") {
     if ($Dialogue) {
         Export-Visuel (Import-Xaml "ReliquatProxy.xaml") $Capture 560 392
+    } elseif ($Applications) {
+        Export-Visuel (Import-Xaml "Applications.xaml") $Capture 620 560
     } else {
         $win = Import-Xaml "Principal.xaml"
         for ($k = 0; $k -le $Etape; $k++) { Set-Scene $win $k }
-        Export-Visuel $win $Capture 1120 828
+        Export-Visuel $win $Capture 1240 1000
     }
     Write-Host ("Capture ecrite : " + $Capture)
     return
@@ -201,11 +275,46 @@ $win.FindName("BtnEffacer").Add_Click({
 $win.FindName("BtnRafraichir").Add_Click({
     Add-Journal $win "info" "Verifications pre-vol relancees : setup.exe, espace disque, reseau, Windows."
 })
-$win.FindName("BtnTester").Add_Click({
-    Add-Journal $win "info" "Test du proxy : CONNECT officecdn.microsoft.com:443 via le relais 127.0.0.1:52144..."
-    Add-Journal $win "ok" "Proxy joignable : 200 Connection established en 38 ms."
-})
 $win.FindName("BtnReliquat").Add_Click({ Show-Reliquat $win })
+$win.FindName("BtnApps").Add_Click({ Show-Applications $win })
+
+# Selecteur de langue : l'apercu fait defiler les deux valeurs du script.
+$win.FindName("LangueChoix").Add_MouseLeftButtonDown({
+    $t = $win.FindName("LangueTexte")
+    $t.Text = if ($t.Text -eq "fr-fr") { "en-us" } else { "fr-fr" }
+    Add-Journal $win "info" ("Langue d'installation : " + $t.Text)
+})
+foreach ($n in @("ChkDepot", "ChkProxy", "ChkKms", "ChkCle", "RadXmlAuto", "RadXmlFichier")) {
+    $win.FindName($n).Add_Click({ Update-Options $win })
+}
+Update-Options $win
+
+# Parcourir : vraies boites de dialogue systeme, aucune ecriture.
+$win.FindName("BtnSetup").Add_Click({
+    $d = New-Object Microsoft.Win32.OpenFileDialog
+    $d.Title = "Selectionner setup.exe (Office Deployment Tool)"
+    $d.Filter = "Executables (*.exe)|*.exe|Tous les fichiers (*.*)|*.*"
+    if ($d.ShowDialog()) { $win.FindName("ChampSetup").Text = $d.FileName }
+})
+$win.FindName("BtnXml").Add_Click({
+    $d = New-Object Microsoft.Win32.OpenFileDialog
+    $d.Title = "Selectionner un fichier de configuration XML (ODT)"
+    $d.Filter = "Fichiers XML (*.xml)|*.xml|Tous les fichiers (*.*)|*.*"
+    if ($d.ShowDialog()) { $win.FindName("ChampXml").Text = $d.FileName }
+})
+$win.FindName("BtnDepot").Add_Click({
+    $d = New-Object System.Windows.Forms.FolderBrowserDialog
+    $d.Description = "Dossier contenant le sous-dossier 'Office' produit par setup.exe /download"
+    if ($d.ShowDialog() -eq "OK") { $win.FindName("ChampDepot").Text = $d.SelectedPath }
+})
+$win.FindName("BtnTestProxy").Add_Click({
+    Add-Journal $win "info" ("Test du proxy " + $win.FindName("ChampProxy").Text + ":" + $win.FindName("ChampPort").Text + "...")
+    Add-Journal $win "ok" "Proxy joignable : 200 Connection established en 42 ms."
+})
+$win.FindName("BtnTestKms").Add_Click({
+    Add-Journal $win "info" ("Connexion KMS " + $win.FindName("ChampKms").Text + ":1688...")
+    Add-Journal $win "ok" "Connexion KMS reussie sur kms.ac-nancy.fr:1688."
+})
 
 $script:i = 0
 $script:minuterie = New-Object System.Windows.Threading.DispatcherTimer
@@ -223,4 +332,5 @@ $win.FindName("BtnInstaller").Add_Click({
 })
 
 if ($Dialogue) { Show-Reliquat $win }
+if ($Applications) { Show-Applications $win }
 [void]$win.ShowDialog()
