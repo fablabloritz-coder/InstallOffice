@@ -50,7 +50,12 @@ function Import-Xaml {
     param([string]$Nom)
     $chemin = Join-Path $dossier $Nom
     if (-not (Test-Path -LiteralPath $chemin)) { throw "Fichier introuvable : $chemin" }
-    [System.Windows.Markup.XamlReader]::Parse([System.IO.File]::ReadAllText($chemin, [System.Text.Encoding]::UTF8))
+    # Les fenetres fusionnent Styles.xaml : une URI de base est necessaire pour que
+    # Source="Styles.xaml" se resolve depuis un XAML non compile.
+    $contexte = New-Object System.Windows.Markup.ParserContext
+    $contexte.BaseUri = New-Object System.Uri($chemin)
+    $flux = [System.IO.File]::OpenRead($chemin)
+    try { return [System.Windows.Markup.XamlReader]::Load($flux, $contexte) } finally { $flux.Close() }
 }
 
 function Get-Pinceau {
@@ -93,7 +98,7 @@ function Set-Etape {
     }
     $titre.Foreground = Get-Pinceau $(if ($Etat -eq "attente" -or $Etat -eq "saute") { "#1B1B1B" } else { $e.Texte })
     $cle = "Etat" + $Etat.Substring(0, 1).ToUpper() + $Etat.Substring(1)
-    $info.Text = [string]$Fenetre.Resources[$cle]
+    $info.Text = [string]$Fenetre.FindResource($cle)
     $info.Foreground = Get-Pinceau $(if ($Etat -eq "attente" -or $Etat -eq "saute") { "#5D5D5D" } else { $e.Texte })
 }
 
