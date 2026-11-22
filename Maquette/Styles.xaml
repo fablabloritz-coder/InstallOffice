@@ -132,6 +132,13 @@
         </ControlTemplate>
       </Setter.Value>
     </Setter>
+    <Style.Triggers>
+      <!-- Meme traitement que les autres boutons : le glyphe s'efface. Sans cela
+           la colonne "Desactive" de la planche montrait un glyphe identique au repos. -->
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Opacity" Value="0.5"/>
+      </Trigger>
+    </Style.Triggers>
   </Style>
 
   <!-- Puces du selecteur d'etapes -->
