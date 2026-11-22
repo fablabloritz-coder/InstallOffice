@@ -16,7 +16,7 @@
 #    ... -Applications                   (ouvre directement les applications)
 #    ... -Capture C:\tmp\ecran.png       (rend l'ecran en PNG et sort)
 #    ... -Capture ... -Etape 6           (etat simule : index du scenario)
-#    ... -Etats                         (planche des etats de boutons)
+#    ... -Etats                         (planche des etats : boutons, champs, cases, radios)
 #    ... -Capture ... -Etats             (rend la planche en PNG)
 #    ... -Capture ... -Dialogue | -Applications
 #    ... -Capture ... -Focus ChkProxy     (met ce controle en focus avant le rendu)
