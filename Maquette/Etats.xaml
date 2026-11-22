@@ -236,17 +236,16 @@
         <TextBlock Grid.Row="11" Text="Bouton radio sélectionné" Style="{StaticResource Etiquette}"/>
         <RadioButton Grid.Row="11" Grid.Column="1" x:Name="OptC_Repos" Content="Automatique"
                      GroupName="OptC_Repos" IsChecked="True" Style="{StaticResource Option}"
-                     HorizontalAlignment="Center" Margin="4,0,4,0"/>
+                     HorizontalAlignment="Center"/>
         <RadioButton Grid.Row="11" Grid.Column="2" x:Name="OptC_Survol" Content="Automatique"
                      GroupName="OptC_Survol" IsChecked="True" Style="{StaticResource Option}"
-                     HorizontalAlignment="Center" Margin="4,0,4,0"/>
+                     HorizontalAlignment="Center"/>
         <RadioButton Grid.Row="11" Grid.Column="4" x:Name="OptC_Focus" Content="Automatique"
                      GroupName="OptC_Focus" IsChecked="True" Style="{StaticResource Option}"
-                     HorizontalAlignment="Center" Margin="4,0,4,0"/>
+                     HorizontalAlignment="Center"/>
         <RadioButton Grid.Row="11" Grid.Column="5" x:Name="OptC_Off" Content="Automatique"
                      GroupName="OptC_Off" IsChecked="True" Style="{StaticResource Option}"
-                     HorizontalAlignment="Center" Margin="4,0,4,0"/>
-
+                     HorizontalAlignment="Center"/>
       </Grid>
 
       <Border Background="#FFFFFF" BorderBrush="{StaticResource Brd}" BorderThickness="1"
