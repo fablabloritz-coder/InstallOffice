@@ -290,6 +290,7 @@ function Set-PlancheEtats {
     $survol = Get-CleEtat ([System.Windows.UIElement]::IsMouseOverProperty) "IsMouseOverPropertyKey"
     $appui = Get-CleEtat ([System.Windows.Controls.Primitives.ButtonBase]::IsPressedProperty) "IsPressedPropertyKey"
     $focus = Get-CleEtat ([System.Windows.UIElement]::IsKeyboardFocusWithinProperty) "IsKeyboardFocusWithinPropertyKey"
+    $focusClavier = Get-CleEtat ([System.Windows.UIElement]::IsKeyboardFocusedProperty) "IsKeyboardFocusedPropertyKey"
     # Boutons : survol, puis appui (qui ajoute son propre declencheur au survol).
     foreach ($v in @("Sec", "Pri", "DlgSec", "DlgPri", "Fen")) {
         $Fenetre.FindName("${v}_Survol").SetValue($survol, $true)
@@ -301,7 +302,9 @@ function Set-PlancheEtats {
     # Champs et cases : ni appui, mais un etat de focus a montrer.
     foreach ($v in @("Sai", "Chk")) {
         $Fenetre.FindName("${v}_Survol").SetValue($survol, $true)
-        $Fenetre.FindName("${v}_Focus").SetValue($focus, $true)
+        $cellule = $Fenetre.FindName("${v}_Focus")
+        $cellule.SetValue($focus, $true)
+        $cellule.SetValue($focusClavier, $true)
         $Fenetre.FindName("${v}_Off").IsEnabled = $false
     }
 }
