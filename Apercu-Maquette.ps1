@@ -258,18 +258,42 @@ function Show-Applications {
 # IsMouseOver et IsPressed sont des proprietes en lecture seule, exposees avec leur
 # cle : les forcer fait evaluer les vrais declencheurs des styles partages.
 $drapeauxStatiques = [System.Reflection.BindingFlags]"NonPublic,Public,Static"
-$clesEtats = @{
-    survol = [System.Windows.UIElement].GetField("IsMouseOverPropertyKey", $drapeauxStatiques).GetValue($null)
-    appui  = [System.Windows.Controls.Primitives.ButtonBase].GetField("IsPressedPropertyKey", $drapeauxStatiques).GetValue($null)
+
+function Get-ClesEtats {
+    # WPF ne publie la cle des deux proprietes en lecture seule que par un champ
+    # interne. Si une version le renomme ou le retire, on s'arrete ici avec un
+    # message explicite plutot que de passer une cle nulle a SetValue.
+    $cles = @{}
+    $champs = @(
+        @{ Cle = "survol" ; Champ = "IsMouseOverPropertyKey" ; Type = [System.Windows.UIElement] },
+        @{ Cle = "appui"  ; Champ = "IsPressedPropertyKey"  ; Type = [System.Windows.Controls.Primitives.ButtonBase] }
+    )
+    foreach ($c in $champs) {
+        $champ = $c.Type.GetField($c.Champ, $drapeauxStatiques)
+        if ($null -eq $champ) {
+            throw ("Planche des etats impossible : le champ interne '$($c.Champ)' est introuvable sur " +
+                   "$($c.Type.FullName). Ce runtime WPF ne permet pas de forcer l'etat des boutons ; " +
+                   "lancer l'apercu sans -Etats.")
+        }
+        $cle = $champ.GetValue($null)
+        if ($cle -isnot [System.Windows.DependencyPropertyKey]) {
+            $obtenu = if ($null -eq $cle) { "nul" } else { $cle.GetType().FullName }
+            throw ("Planche des etats impossible : '$($c.Champ)' sur $($c.Type.FullName) ne contient " +
+                   "pas une DependencyPropertyKey (obtenu : $obtenu).")
+        }
+        $cles[$c.Cle] = $cle
+    }
+    $cles
 }
 
 function Set-PlancheEtats {
     param($Fenetre)
+    $cles = Get-ClesEtats
     foreach ($v in @("Sec", "Pri", "DlgSec", "DlgPri", "Fen")) {
-        $Fenetre.FindName("${v}_Survol").SetValue($clesEtats.survol, $true)
+        $Fenetre.FindName("${v}_Survol").SetValue($cles.survol, $true)
         $appui = $Fenetre.FindName("${v}_Appui")
-        $appui.SetValue($clesEtats.survol, $true)
-        $appui.SetValue($clesEtats.appui, $true)
+        $appui.SetValue($cles.survol, $true)
+        $appui.SetValue($cles.appui, $true)
         $Fenetre.FindName("${v}_Off").IsEnabled = $false
     }
 }
