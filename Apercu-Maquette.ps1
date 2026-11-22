@@ -286,6 +286,34 @@ function Get-CleEtat {
     $cle
 }
 
+# Une seule table decrit la planche : chaque variante, l'appui qu'elle porte (les
+# boutons seulement) et la propriete de focus que surveille son gabarit (interne
+# pour le champ, clavier pour les cases et les radios, aucune pour la barre de
+# titre, dont les glyphes colles seraient rognes par la barre).
+$tablePlanche = @(
+    @{ Nom = "Sec"    ; Appui = $true  ; Focus = "clavier" }
+    @{ Nom = "Pri"    ; Appui = $true  ; Focus = "clavier" }
+    @{ Nom = "DlgSec" ; Appui = $true  ; Focus = "clavier" }
+    @{ Nom = "DlgPri" ; Appui = $true  ; Focus = "clavier" }
+    @{ Nom = "Fen"    ; Appui = $true  ; Focus = "" }
+    @{ Nom = "Sai"    ; Appui = $false ; Focus = "interne" }
+    @{ Nom = "Chk"    ; Appui = $false ; Focus = "clavier" }
+    @{ Nom = "ChkC"   ; Appui = $false ; Focus = "clavier" }
+    @{ Nom = "Opt"    ; Appui = $false ; Focus = "clavier" }
+    @{ Nom = "OptC"   ; Appui = $false ; Focus = "clavier" }
+)
+
+function Get-Cellule {
+    # Une cellule renommee dans Etats.xaml s'arrete ici, en la nommant, et non
+    # plus loin sur un appel de methode a $null.
+    param($Fenetre, [string]$Nom)
+    $cellule = $Fenetre.FindName($Nom)
+    if ($null -eq $cellule) {
+        throw "Cellule '$Nom' introuvable dans la planche : ce nom a-t-il change dans Etats.xaml ?"
+    }
+    $cellule
+}
+
 function Set-PlancheEtats {
     param($Fenetre)
     # Resolues ici seulement : sans -Etats, l'apercu ne lit aucun champ interne.
@@ -293,27 +321,22 @@ function Set-PlancheEtats {
     $appui = Get-CleEtat ([System.Windows.Controls.Primitives.ButtonBase]::IsPressedProperty) "IsPressedPropertyKey"
     $focusDedans = Get-CleEtat ([System.Windows.UIElement]::IsKeyboardFocusWithinProperty) "IsKeyboardFocusWithinPropertyKey"
     $focusClavier = Get-CleEtat ([System.Windows.UIElement]::IsKeyboardFocusedProperty) "IsKeyboardFocusedPropertyKey"
-    # Boutons : survol, puis appui (qui ajoute son propre declencheur au survol).
-    foreach ($v in @("Sec", "Pri", "DlgSec", "DlgPri", "Fen")) {
-        $Fenetre.FindName("${v}_Survol").SetValue($survol, $true)
-        $bouton = $Fenetre.FindName("${v}_Appui")
-        $bouton.SetValue($survol, $true)
-        $bouton.SetValue($appui, $true)
-        $Fenetre.FindName("${v}_Off").IsEnabled = $false
-    }
-    # Focus des boutons : la barre de titre n'en a pas (glyphes colles, barre rognante).
-    foreach ($v in @("Sec", "Pri", "DlgSec", "DlgPri")) {
-        $Fenetre.FindName("${v}_Focus").SetValue($focusClavier, $true)
-    }
-    # Champs et cases : ni appui, mais un focus, chacun sur la propriete que son
-    # gabarit surveille (le champ le focus interne, la case le focus direct).
-    $Fenetre.FindName("Sai_Focus").SetValue($focusDedans, $true)
-    foreach ($v in @("Sai", "Chk", "ChkC", "Opt", "OptC")) {
-        $Fenetre.FindName("${v}_Survol").SetValue($survol, $true)
-        $Fenetre.FindName("${v}_Off").IsEnabled = $false
-    }
-    foreach ($v in @("Chk", "ChkC", "Opt", "OptC")) {
-        $Fenetre.FindName("${v}_Focus").SetValue($focusClavier, $true)
+    foreach ($ligne in $tablePlanche) {
+        $v = $ligne.Nom
+        (Get-Cellule $Fenetre "${v}_Survol").SetValue($survol, $true)
+        $eteinte = Get-Cellule $Fenetre "${v}_Off"
+        $eteinte.IsEnabled = $false
+        if ($ligne.Focus -eq "interne") {
+            (Get-Cellule $Fenetre "${v}_Focus").SetValue($focusDedans, $true)
+        } elseif ($ligne.Focus -eq "clavier") {
+            (Get-Cellule $Fenetre "${v}_Focus").SetValue($focusClavier, $true)
+        }
+        if ($ligne.Appui) {
+            # L'appui cumule le survol : son declencheur passe apres celui du survol.
+            $bouton = Get-Cellule $Fenetre "${v}_Appui"
+            $bouton.SetValue($survol, $true)
+            $bouton.SetValue($appui, $true)
+        }
     }
 }
 
