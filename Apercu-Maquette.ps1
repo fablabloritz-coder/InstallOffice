@@ -302,11 +302,11 @@ function Set-PlancheEtats {
     # Champs et cases : ni appui, mais un focus, chacun sur la propriete que son
     # gabarit surveille (le champ le focus interne, la case le focus direct).
     $Fenetre.FindName("Sai_Focus").SetValue($focusDedans, $true)
-    foreach ($v in @("Sai", "Chk", "ChkC")) {
+    foreach ($v in @("Sai", "Chk", "ChkC", "Opt", "OptC")) {
         $Fenetre.FindName("${v}_Survol").SetValue($survol, $true)
         $Fenetre.FindName("${v}_Off").IsEnabled = $false
     }
-    foreach ($v in @("Chk", "ChkC")) {
+    foreach ($v in @("Chk", "ChkC", "Opt", "OptC")) {
         $Fenetre.FindName("${v}_Focus").SetValue($focusClavier, $true)
     }
 }
@@ -320,7 +320,7 @@ if ($Capture -ne "") {
     } elseif ($Etats) {
         $planche = Import-Xaml "Etats.xaml"
         Set-PlancheEtats $planche
-        Export-Visuel $planche $Capture 980 522
+        Export-Visuel $planche $Capture 980 594
     } else {
         $win = Import-Xaml "Principal.xaml"
         for ($k = 0; $k -le $Etape; $k++) { Set-Scene $win $k }
