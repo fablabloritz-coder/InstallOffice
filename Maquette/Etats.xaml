@@ -1,7 +1,7 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Etats des controles"
-        Width="980" Height="594"
+        Width="1216" Height="595"
         WindowStyle="None" ResizeMode="NoResize"
         WindowStartupLocation="CenterScreen"
         Background="Transparent"
@@ -20,11 +20,13 @@
       <TextBlock FontSize="12" Foreground="{StaticResource Texte2}" TextWrapping="Wrap"
                  Margin="0,4,0,0">Survol, appui et focus sont forcés sur les propriétés de dépendance
         que surveillent les gabarits (IsMouseOver, IsPressed, IsKeyboardFocusWithin, IsKeyboardFocused) :
-        les déclencheurs évalués restent ceux du dictionnaire partagé, avec l'héritage de BoutonPrimaire.</TextBlock>
+        les déclencheurs évalués restent ceux du dictionnaire partagé, avec l'héritage de BoutonPrimaire.
+        Une cellule vide signifie que le contrôle n'a pas cet état.</TextBlock>
 
       <Grid Margin="0,18,0,0">
         <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="220"/>
+          <ColumnDefinition Width="210"/>
+          <ColumnDefinition Width="*"/>
           <ColumnDefinition Width="*"/>
           <ColumnDefinition Width="*"/>
           <ColumnDefinition Width="*"/>
@@ -52,7 +54,9 @@
                    Foreground="{StaticResource Texte2}" HorizontalAlignment="Center" Margin="0,0,0,10"/>
         <TextBlock Grid.Row="0" Grid.Column="3" Text="Appui" FontSize="12" FontWeight="SemiBold"
                    Foreground="{StaticResource Texte2}" HorizontalAlignment="Center" Margin="0,0,0,10"/>
-        <TextBlock Grid.Row="0" Grid.Column="4" Text="Désactivé" FontSize="12" FontWeight="SemiBold"
+        <TextBlock Grid.Row="0" Grid.Column="4" Text="Focus" FontSize="12" FontWeight="SemiBold"
+                   Foreground="{StaticResource Texte2}" HorizontalAlignment="Center" Margin="0,0,0,10"/>
+        <TextBlock Grid.Row="0" Grid.Column="5" Text="Désactivé" FontSize="12" FontWeight="SemiBold"
                    Foreground="{StaticResource Texte2}" HorizontalAlignment="Center" Margin="0,0,0,10"/>
 
         <!-- Fenetre principale : secondaire -->
@@ -67,7 +71,10 @@
         <Button Grid.Row="1" Grid.Column="3" x:Name="Sec_Appui" Content="Effacer"
                 Style="{StaticResource BoutonSecondaire}" HorizontalAlignment="Center"
                 Margin="4,0,4,10"/>
-        <Button Grid.Row="1" Grid.Column="4" x:Name="Sec_Off" Content="Effacer"
+        <Button Grid.Row="1" Grid.Column="4" x:Name="Sec_Focus" Content="Effacer"
+                Style="{StaticResource BoutonSecondaire}" HorizontalAlignment="Center"
+                Margin="4,0,4,10"/>
+        <Button Grid.Row="1" Grid.Column="5" x:Name="Sec_Off" Content="Effacer"
                 Style="{StaticResource BoutonSecondaire}" HorizontalAlignment="Center"
                 Margin="4,0,4,10"/>
 
@@ -83,7 +90,10 @@
         <Button Grid.Row="2" Grid.Column="3" x:Name="Pri_Appui" Content="Installer Office 2024"
                 Style="{StaticResource BoutonPrimaire}" HorizontalAlignment="Center"
                 Margin="4,0,4,10"/>
-        <Button Grid.Row="2" Grid.Column="4" x:Name="Pri_Off" Content="Installer Office 2024"
+        <Button Grid.Row="2" Grid.Column="4" x:Name="Pri_Focus" Content="Installer Office 2024"
+                Style="{StaticResource BoutonPrimaire}" HorizontalAlignment="Center"
+                Margin="4,0,4,10"/>
+        <Button Grid.Row="2" Grid.Column="5" x:Name="Pri_Off" Content="Installer Office 2024"
                 Style="{StaticResource BoutonPrimaire}" HorizontalAlignment="Center"
                 Margin="4,0,4,10"/>
 
@@ -99,7 +109,10 @@
         <Button Grid.Row="3" Grid.Column="3" x:Name="DlgSec_Appui" Content="Annuler"
                 Style="{StaticResource BoutonSecondaire}" Foreground="#000000"
                 HorizontalAlignment="Center" Margin="4,0,4,10"/>
-        <Button Grid.Row="3" Grid.Column="4" x:Name="DlgSec_Off" Content="Annuler"
+        <Button Grid.Row="3" Grid.Column="4" x:Name="DlgSec_Focus" Content="Annuler"
+                Style="{StaticResource BoutonSecondaire}" Foreground="#000000"
+                HorizontalAlignment="Center" Margin="4,0,4,10"/>
+        <Button Grid.Row="3" Grid.Column="5" x:Name="DlgSec_Off" Content="Annuler"
                 Style="{StaticResource BoutonSecondaire}" Foreground="#000000"
                 HorizontalAlignment="Center" Margin="4,0,4,10"/>
 
@@ -115,61 +128,70 @@
         <Button Grid.Row="4" Grid.Column="3" x:Name="DlgPri_Appui" Content="Appliquer"
                 Style="{StaticResource BoutonPrimaire}" HorizontalAlignment="Center"
                 Margin="4,0,4,10"/>
-        <Button Grid.Row="4" Grid.Column="4" x:Name="DlgPri_Off" Content="Appliquer"
+        <Button Grid.Row="4" Grid.Column="4" x:Name="DlgPri_Focus" Content="Appliquer"
+                Style="{StaticResource BoutonPrimaire}" HorizontalAlignment="Center"
+                Margin="4,0,4,10"/>
+        <Button Grid.Row="4" Grid.Column="5" x:Name="DlgPri_Off" Content="Appliquer"
                 Style="{StaticResource BoutonPrimaire}" HorizontalAlignment="Center"
                 Margin="4,0,4,10"/>
 
-        <!-- Barre de titre -->
-        <TextBlock Grid.Row="5" Text="Barre de titre" Style="{StaticResource Etiquette}"/>
+        <!-- Barre de titre : pas de focus, les glyphes sont colles et rognes par la barre -->
+        <TextBlock Grid.Row="5" Text="Barre de titre" Style="{StaticResource Etiquette}"
+                   Margin="0,0,0,10"/>
         <Button Grid.Row="5" Grid.Column="1" x:Name="Fen_Repos" Content="&#xE921;"
-                Style="{StaticResource BoutonFenetre}" HorizontalAlignment="Center"/>
+                Style="{StaticResource BoutonFenetre}" HorizontalAlignment="Center"
+                Margin="4,0,4,10"/>
         <Button Grid.Row="5" Grid.Column="2" x:Name="Fen_Survol" Content="&#xE921;"
-                Style="{StaticResource BoutonFenetre}" HorizontalAlignment="Center"/>
+                Style="{StaticResource BoutonFenetre}" HorizontalAlignment="Center"
+                Margin="4,0,4,10"/>
         <Button Grid.Row="5" Grid.Column="3" x:Name="Fen_Appui" Content="&#xE921;"
-                Style="{StaticResource BoutonFenetre}" HorizontalAlignment="Center"/>
-        <Button Grid.Row="5" Grid.Column="4" x:Name="Fen_Off" Content="&#xE921;"
-                Style="{StaticResource BoutonFenetre}" HorizontalAlignment="Center"/>
+                Style="{StaticResource BoutonFenetre}" HorizontalAlignment="Center"
+                Margin="4,0,4,10"/>
+        <Button Grid.Row="5" Grid.Column="5" x:Name="Fen_Off" Content="&#xE921;"
+                Style="{StaticResource BoutonFenetre}" HorizontalAlignment="Center"
+                Margin="4,0,4,10"/>
 
-        <!-- Champ de saisie : survol gris, focus accent -->
+        <!-- Champ de saisie : survol gris, focus accent, pas d'appui -->
         <TextBlock Grid.Row="6" Text="Champ de saisie" Style="{StaticResource Etiquette}"
                    Margin="0,0,0,10"/>
         <TextBox Grid.Row="6" Grid.Column="1" x:Name="Sai_Repos" Text="proxy.contoso.fr"
-                 Style="{StaticResource Champ}" Width="200" HorizontalAlignment="Center"
+                 Style="{StaticResource Champ}" Width="190" HorizontalAlignment="Center"
                  Margin="4,0,4,10"/>
         <TextBox Grid.Row="6" Grid.Column="2" x:Name="Sai_Survol" Text="proxy.contoso.fr"
-                 Style="{StaticResource Champ}" Width="200" HorizontalAlignment="Center"
+                 Style="{StaticResource Champ}" Width="190" HorizontalAlignment="Center"
                  Margin="4,0,4,10"/>
-        <TextBox Grid.Row="6" Grid.Column="3" x:Name="Sai_Focus" Text="proxy.contoso.fr"
-                 Style="{StaticResource Champ}" Width="200" HorizontalAlignment="Center"
+        <TextBox Grid.Row="6" Grid.Column="4" x:Name="Sai_Focus" Text="proxy.contoso.fr"
+                 Style="{StaticResource Champ}" Width="190" HorizontalAlignment="Center"
                  Margin="4,0,4,10"/>
-        <TextBox Grid.Row="6" Grid.Column="4" x:Name="Sai_Off" Text="proxy.contoso.fr"
-                 Style="{StaticResource Champ}" Width="200" HorizontalAlignment="Center"
+        <TextBox Grid.Row="6" Grid.Column="5" x:Name="Sai_Off" Text="proxy.contoso.fr"
+                 Style="{StaticResource Champ}" Width="190" HorizontalAlignment="Center"
                  Margin="4,0,4,10"/>
 
-        <!-- Case a cocher : survol accent, aucun declencheur de focus -->
+        <!-- Case a cocher -->
         <TextBlock Grid.Row="7" Text="Case à cocher" Style="{StaticResource Etiquette}"
                    Margin="0,0,0,10"/>
         <CheckBox Grid.Row="7" Grid.Column="1" x:Name="Chk_Repos" Content="Activer le proxy"
                   Style="{StaticResource Case}" HorizontalAlignment="Center" Margin="4,0,4,10"/>
         <CheckBox Grid.Row="7" Grid.Column="2" x:Name="Chk_Survol" Content="Activer le proxy"
                   Style="{StaticResource Case}" HorizontalAlignment="Center" Margin="4,0,4,10"/>
-        <CheckBox Grid.Row="7" Grid.Column="3" x:Name="Chk_Focus" Content="Activer le proxy"
+        <CheckBox Grid.Row="7" Grid.Column="4" x:Name="Chk_Focus" Content="Activer le proxy"
                   Style="{StaticResource Case}" HorizontalAlignment="Center" Margin="4,0,4,10"/>
-        <CheckBox Grid.Row="7" Grid.Column="4" x:Name="Chk_Off" Content="Activer le proxy"
+        <CheckBox Grid.Row="7" Grid.Column="5" x:Name="Chk_Off" Content="Activer le proxy"
                   Style="{StaticResource Case}" HorizontalAlignment="Center" Margin="4,0,4,10"/>
 
         <!-- Case cochee : le focus doit rester visible sous le remplissage accent -->
-        <TextBlock Grid.Row="8" Text="Case cochée" Style="{StaticResource Etiquette}"/>
+        <TextBlock Grid.Row="8" Text="Case cochée" Style="{StaticResource Etiquette}"
+                   Margin="0,0,0,10"/>
         <CheckBox Grid.Row="8" Grid.Column="1" x:Name="ChkC_Repos" Content="Activer le proxy"
                   IsChecked="True" Style="{StaticResource Case}" HorizontalAlignment="Center"
                   Margin="4,0,4,10"/>
         <CheckBox Grid.Row="8" Grid.Column="2" x:Name="ChkC_Survol" Content="Activer le proxy"
                   IsChecked="True" Style="{StaticResource Case}" HorizontalAlignment="Center"
                   Margin="4,0,4,10"/>
-        <CheckBox Grid.Row="8" Grid.Column="3" x:Name="ChkC_Focus" Content="Activer le proxy"
+        <CheckBox Grid.Row="8" Grid.Column="4" x:Name="ChkC_Focus" Content="Activer le proxy"
                   IsChecked="True" Style="{StaticResource Case}" HorizontalAlignment="Center"
                   Margin="4,0,4,10"/>
-        <CheckBox Grid.Row="8" Grid.Column="4" x:Name="ChkC_Off" Content="Activer le proxy"
+        <CheckBox Grid.Row="8" Grid.Column="5" x:Name="ChkC_Off" Content="Activer le proxy"
                   IsChecked="True" Style="{StaticResource Case}" HorizontalAlignment="Center"
                   Margin="4,0,4,10"/>
 
@@ -183,10 +205,10 @@
         <RadioButton Grid.Row="9" Grid.Column="2" x:Name="Opt_Survol" Content="Automatique"
                      GroupName="Opt_Survol" Style="{StaticResource Option}" HorizontalAlignment="Center"
                      Margin="4,0,4,10"/>
-        <RadioButton Grid.Row="9" Grid.Column="3" x:Name="Opt_Focus" Content="Automatique"
+        <RadioButton Grid.Row="9" Grid.Column="4" x:Name="Opt_Focus" Content="Automatique"
                      GroupName="Opt_Focus" Style="{StaticResource Option}" HorizontalAlignment="Center"
                      Margin="4,0,4,10"/>
-        <RadioButton Grid.Row="9" Grid.Column="4" x:Name="Opt_Off" Content="Automatique"
+        <RadioButton Grid.Row="9" Grid.Column="5" x:Name="Opt_Off" Content="Automatique"
                      GroupName="Opt_Off" Style="{StaticResource Option}" HorizontalAlignment="Center"
                      Margin="4,0,4,10"/>
 
@@ -194,26 +216,26 @@
         <TextBlock Grid.Row="10" Text="Bouton radio sélectionné" Style="{StaticResource Etiquette}"/>
         <RadioButton Grid.Row="10" Grid.Column="1" x:Name="OptC_Repos" Content="Automatique"
                      GroupName="OptC_Repos" IsChecked="True" Style="{StaticResource Option}"
-                     HorizontalAlignment="Center" Margin="4,0,4,10"/>
+                     HorizontalAlignment="Center" Margin="4,0,4,0"/>
         <RadioButton Grid.Row="10" Grid.Column="2" x:Name="OptC_Survol" Content="Automatique"
                      GroupName="OptC_Survol" IsChecked="True" Style="{StaticResource Option}"
-                     HorizontalAlignment="Center" Margin="4,0,4,10"/>
-        <RadioButton Grid.Row="10" Grid.Column="3" x:Name="OptC_Focus" Content="Automatique"
+                     HorizontalAlignment="Center" Margin="4,0,4,0"/>
+        <RadioButton Grid.Row="10" Grid.Column="4" x:Name="OptC_Focus" Content="Automatique"
                      GroupName="OptC_Focus" IsChecked="True" Style="{StaticResource Option}"
-                     HorizontalAlignment="Center" Margin="4,0,4,10"/>
-        <RadioButton Grid.Row="10" Grid.Column="4" x:Name="OptC_Off" Content="Automatique"
+                     HorizontalAlignment="Center" Margin="4,0,4,0"/>
+        <RadioButton Grid.Row="10" Grid.Column="5" x:Name="OptC_Off" Content="Automatique"
                      GroupName="OptC_Off" IsChecked="True" Style="{StaticResource Option}"
-                     HorizontalAlignment="Center" Margin="4,0,4,10"/>
+                     HorizontalAlignment="Center" Margin="4,0,4,0"/>
       </Grid>
 
       <Border Background="#FFFFFF" BorderBrush="{StaticResource Brd}" BorderThickness="1"
               CornerRadius="6" Padding="12,9" Margin="0,10,0,0">
         <TextBlock FontSize="12" Foreground="{StaticResource Texte2}" TextWrapping="Wrap">Au survol,
           le primaire reste bleu foncé (#115EA3) : son déclencheur l'emporte sur le gris hérité du
-          secondaire. Le bouton de dialogue garde un texte noir. La barre de titre n'a que le survol,
-          et aucun état désactivé. Au focus clavier, le champ prend une bordure accent ; la case et le
-          radio y ajoutent un anneau d'accent, qui reste visible une fois cochés, là où la bordure seule
-          se confondrait avec le remplissage.</TextBlock>
+          secondaire. Le bouton de dialogue garde un texte noir. Au focus clavier, tous les boutons
+          affichent un anneau d'accent hors du cadre, le champ prend une bordure accent, et la case
+          comme le radio ajoutent ce même anneau. Le radio se grise désormais une fois désactivé ; la
+          barre de titre n'a que le survol, ses glyphes collés étant rognés par la barre.</TextBlock>
       </Border>
     </StackPanel>
   </Border>
