@@ -187,7 +187,7 @@
             <StackPanel>
               <Grid>
                 <TextBlock Text="Vérifications pré-vol" Style="{StaticResource TitreCarte}"/>
-                <Button x:Name="BtnRafraichir" Style="{StaticResource Bouton}" Content="Rafraîchir"
+                <Button x:Name="BtnRafraichir" Style="{StaticResource BoutonSecondaire}" Content="Rafraîchir"
                         Padding="10,2" FontSize="12" HorizontalAlignment="Right"/>
               </Grid>
               <UniformGrid Columns="2" Margin="0,12,0,0">
@@ -239,9 +239,9 @@
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                   <TextBlock Text="Deploiement_20261122.log" Style="{StaticResource Secondaire}"
                              VerticalAlignment="Center" Margin="0,0,10,0"/>
-                  <Button x:Name="BtnEffacer" Style="{StaticResource Bouton}" Content="Effacer"
+                  <Button x:Name="BtnEffacer" Style="{StaticResource BoutonSecondaire}" Content="Effacer"
                           Padding="10,3" FontSize="12"/>
-                  <Button x:Name="BtnExporter" Style="{StaticResource Bouton}" Content="Exporter"
+                  <Button x:Name="BtnExporter" Style="{StaticResource BoutonSecondaire}" Content="Exporter"
                           Padding="10,3" FontSize="12" Margin="6,0,0,0"/>
                 </StackPanel>
               </Grid>
@@ -276,7 +276,7 @@
                   <TextBlock Text="Programme setup.exe" Style="{StaticResource Etiquette}"/>
                   <TextBox x:Name="ChampSetup" Grid.Column="1" Style="{StaticResource Champ}"
                            Text="C:\InstallOffice2024\setup.exe"/>
-                  <Button x:Name="BtnSetup" Grid.Column="2" Style="{StaticResource Bouton}"
+                  <Button x:Name="BtnSetup" Grid.Column="2" Style="{StaticResource BoutonSecondaire}"
                           Content="Parcourir…" Padding="10,4" FontSize="12" Margin="8,0,0,0"/>
                 </Grid>
                 <Grid Margin="0,7,0,0">
@@ -316,7 +316,7 @@
                   <TextBlock Text="Dossier du dépôt" Style="{StaticResource Etiquette}"/>
                   <TextBox x:Name="ChampDepot" Grid.Column="1" Style="{StaticResource Champ}"
                            Text="\\serveur\office" IsEnabled="False"/>
-                  <Button x:Name="BtnDepot" Grid.Column="2" Style="{StaticResource Bouton}"
+                  <Button x:Name="BtnDepot" Grid.Column="2" Style="{StaticResource BoutonSecondaire}"
                           Content="Parcourir…" Padding="10,4" FontSize="12" Margin="8,0,0,0"
                           IsEnabled="False"/>
                 </Grid>
@@ -327,7 +327,7 @@
                   <RadioButton x:Name="RadXmlAuto" Style="{StaticResource Option}"
                                Content="Générer automatiquement" IsChecked="True"
                                VerticalAlignment="Center"/>
-                  <Button x:Name="BtnApps" Style="{StaticResource Bouton}"
+                  <Button x:Name="BtnApps" Style="{StaticResource BoutonSecondaire}"
                           Content="Personnaliser les apps…" Padding="10,4" FontSize="12"
                           HorizontalAlignment="Right"/>
                 </Grid>
@@ -343,7 +343,7 @@
                                Content="Utiliser un fichier" VerticalAlignment="Center"/>
                   <TextBox x:Name="ChampXml" Grid.Column="1" Style="{StaticResource Champ}"
                            Margin="8,0,0,0" IsEnabled="False"/>
-                  <Button x:Name="BtnXml" Grid.Column="2" Style="{StaticResource Bouton}"
+                  <Button x:Name="BtnXml" Grid.Column="2" Style="{StaticResource BoutonSecondaire}"
                           Content="Parcourir…" Padding="10,4" FontSize="12" Margin="8,0,0,0"
                           IsEnabled="False"/>
                 </Grid>
@@ -360,7 +360,7 @@
                             IsChecked="True" VerticalAlignment="Center"/>
                   <TextBox x:Name="ChampKms" Grid.Column="1" Style="{StaticResource Champ}"
                            Text="kms.ac-nancy.fr" Margin="10,0,0,0"/>
-                  <Button x:Name="BtnTestKms" Grid.Column="2" Style="{StaticResource Bouton}"
+                  <Button x:Name="BtnTestKms" Grid.Column="2" Style="{StaticResource BoutonSecondaire}"
                           Content="Tester la connexion" Padding="10,4" FontSize="12"
                           Margin="8,0,0,0"/>
                 </Grid>
@@ -424,7 +424,7 @@
                            Text="eleve" IsEnabled="False"/>
                   <PasswordBox x:Name="ChampProxyPass" Grid.Column="2" Margin="8,0,0,0" Width="130"
                                Style="{StaticResource ChampSecret}" IsEnabled="False"/>
-                  <Button x:Name="BtnTestProxy" Grid.Column="3" Style="{StaticResource Bouton}"
+                  <Button x:Name="BtnTestProxy" Grid.Column="3" Style="{StaticResource BoutonSecondaire}"
                           Content="Tester le proxy" Padding="10,4" FontSize="12" Margin="8,0,0,0"
                           IsEnabled="False"/>
                 </Grid>
@@ -461,7 +461,7 @@
                       VerticalAlignment="Center">
             <TextBlock Text="Lycée Loritz, Grand Est" Style="{StaticResource Secondaire}"
                        VerticalAlignment="Center" Margin="0,0,16,0"/>
-            <Button x:Name="BtnReliquat" Style="{StaticResource Bouton}"
+            <Button x:Name="BtnReliquat" Style="{StaticResource BoutonSecondaire}"
                     Content="Simuler un reliquat de proxy" Padding="12,6" FontSize="12"/>
             <Button x:Name="BtnInstaller" Style="{StaticResource BoutonPrimaire}"
                     Content="Installer Office 2024" Padding="16,7" Margin="8,0,0,0"/>
