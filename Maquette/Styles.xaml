@@ -36,13 +36,19 @@
     <Setter Property="VerticalAlignment" Value="Center"/>
   </Style>
 
-  <!-- Boutons : un seul gabarit, les variantes ne changent que des couleurs. -->
-  <Style x:Key="BoutonBase" TargetType="Button">
+  <!-- Boutons : un seul gabarit, porte par le style secondaire. Le primaire n'en
+       herite que pour changer des couleurs, la graisse et la marge interne.
+       Couleur du texte : le secondaire pose #1B1B1B, la teinte de la fenetre
+       principale. Les deux dialogues ecrivent Foreground="#000000" sur leur bouton
+       secondaire : ils gardent ainsi le noir systeme qu'ils heritaient avant la
+       fusion des styles, et leur rendu reste identique. -->
+  <Style x:Key="BoutonSecondaire" TargetType="Button">
     <Setter Property="Background" Value="#FFFFFF"/>
     <Setter Property="BorderBrush" Value="{StaticResource ChampBord}"/>
     <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Padding" Value="14,7"/>
     <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Foreground" Value="{StaticResource Texte}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
@@ -57,25 +63,18 @@
       </Setter.Value>
     </Setter>
     <Style.Triggers>
-      <Trigger Property="IsEnabled" Value="False">
-        <Setter Property="Opacity" Value="0.5"/>
-      </Trigger>
-    </Style.Triggers>
-  </Style>
-  <!-- Secondaire : fond clair, survol gris, appui plus soutenu. Un dialogue qui veut
-       le noir du systeme pose Foreground="#000000" sur le bouton. -->
-  <Style x:Key="BoutonSecondaire" TargetType="Button" BasedOn="{StaticResource BoutonBase}">
-    <Setter Property="Foreground" Value="{StaticResource Texte}"/>
-    <Style.Triggers>
       <Trigger Property="IsMouseOver" Value="True">
         <Setter Property="Background" Value="#F5F5F5"/>
       </Trigger>
       <Trigger Property="IsPressed" Value="True">
         <Setter Property="Background" Value="#EDEDED"/>
       </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Opacity" Value="0.5"/>
+      </Trigger>
     </Style.Triggers>
   </Style>
-  <Style x:Key="BoutonPrimaire" TargetType="Button" BasedOn="{StaticResource BoutonBase}">
+  <Style x:Key="BoutonPrimaire" TargetType="Button" BasedOn="{StaticResource BoutonSecondaire}">
     <Setter Property="Foreground" Value="#FFFFFF"/>
     <Setter Property="Background" Value="{StaticResource Accent}"/>
     <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>

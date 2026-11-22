@@ -464,7 +464,7 @@
             <Button x:Name="BtnReliquat" Style="{StaticResource BoutonSecondaire}"
                     Content="Simuler un reliquat de proxy" Padding="12,6" FontSize="12"/>
             <Button x:Name="BtnInstaller" Style="{StaticResource BoutonPrimaire}"
-                    Content="Installer Office 2024" Padding="16,7" Margin="8,0,0,0"/>
+                    Content="Installer Office 2024" Margin="8,0,0,0"/>
           </StackPanel>
         </Grid>
       </Border>
