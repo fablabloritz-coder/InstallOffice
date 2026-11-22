@@ -313,6 +313,10 @@ function Get-CleEtatNommee {
 # Une seule table decrit la planche : par variante, l'etat d'appui (boutons
 # seulement) et l'etat de focus que surveille son gabarit. Une valeur vide dit que
 # la cellule n'existe pas dans Etats.xaml.
+# Suffixes que le forcage ci-dessous ajoute au nom d'une variante : une cellule
+# se reconnait a ce suffixe, et rien d'autre dans la grille n'en est une.
+$suffixesCellules = "Repos", "Survol", "Appui", "Focus", "Off"
+
 $tablePlanche = @(
     @{ Nom = "Sec"    ; Appui = "IsPressed" ; Focus = "IsKeyboardFocused" }
     @{ Nom = "Pri"    ; Appui = "IsPressed" ; Focus = "IsKeyboardFocused" }
@@ -338,17 +342,13 @@ function Get-Cellule {
 }
 
 function Get-NomsSousArbre {
-    # Noms portes par les descendants d'un element, parent exclu : sert a reperer
-    # une cellule de la grille que la table ignore.
+    # Noms portes par les descendants d'un element, parent exclu.
     param($Element)
     $noms = @()
     foreach ($enfant in [System.Windows.LogicalTreeHelper]::GetChildren($Element)) {
-        if ($enfant -is [System.Windows.DependencyObject]) {
-            if ($enfant -is [System.Windows.FrameworkElement] -and $enfant.Name) {
-                $noms += $enfant.Name
-            }
-            $noms += Get-NomsSousArbre $enfant
-        }
+        if ($enfant -isnot [System.Windows.FrameworkElement]) { continue }
+        if ($enfant.Name) { $noms += $enfant.Name }
+        $noms += Get-NomsSousArbre $enfant
     }
     $noms
 }
@@ -372,7 +372,9 @@ function Set-PlancheEtats {
     if ($null -eq $grille) {
         throw "Grille 'GrilleCellules' introuvable : son nom a-t-il change dans Etats.xaml ?"
     }
-    $orphelines = @(Get-NomsSousArbre $grille | Where-Object { $attendues -notcontains $_ })
+    $motif = "_($($suffixesCellules -join '|'))$"
+    $orphelines = @(Get-NomsSousArbre $grille |
+        Where-Object { $_ -match $motif -and $attendues -notcontains $_ })
     if ($orphelines.Count -gt 0) {
         throw ("Cellule(s) de la planche hors table : " + ($orphelines -join ", ") +
                ". Ajouter la variante a tablePlanche, sinon son etat ne serait jamais force.")
