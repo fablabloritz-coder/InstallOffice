@@ -206,17 +206,27 @@ function Export-Visuel {
     try { $enc.Save($flux) } finally { $flux.Close() }
 }
 
-function Get-TaillePlanche {
-    # La hauteur suit le nombre de lignes ; les colonnes de la grille etant
-    # proportionnelles, la largeur vient de la fenetre (Width dans Etats.xaml).
-    # Arrondi au pixel superieur : une fraction de pixel de plus rognerait le bas.
+function Get-TailleCapture {
+    # Taille lue dans le XAML de la fenetre. La planche n'y declare pas de
+    # hauteur (SizeToContent) : elle se mesure sur le contenu, a la largeur de
+    # la fenetre, ses colonnes etant proportionnelles. Arrondi au pixel
+    # superieur : une fraction de pixel de plus rognerait le bas.
     param($Fenetre)
     if ([double]::IsNaN($Fenetre.Width)) {
-        throw "Planche sans largeur : Etats.xaml doit declarer Width (colonnes proportionnelles)."
+        throw "Capture sans largeur : la fenetre doit declarer Width."
     }
     $largeur = [int][Math]::Ceiling($Fenetre.Width)
+    if (-not [double]::IsNaN($Fenetre.Height)) {
+        return (New-Object System.Windows.Size($largeur, [int][Math]::Ceiling($Fenetre.Height)))
+    }
     $Fenetre.Content.Measure((New-Object System.Windows.Size($largeur, [double]::PositiveInfinity)))
     return (New-Object System.Windows.Size($largeur, [int][Math]::Ceiling($Fenetre.Content.DesiredSize.Height)))
+}
+
+function Export-Fenetre {
+    param($Fenetre, [string]$Chemin)
+    $taille = Get-TailleCapture $Fenetre
+    Export-Visuel $Fenetre $Chemin $taille.Width $taille.Height
 }
 
 function Show-Reliquat {
@@ -429,21 +439,20 @@ if ($Capture -ne "") {
     if ($Dialogue) {
         $dlg = Import-Xaml "ReliquatProxy.xaml"
         if ($Focus -ne "") { Set-FocusCapture $dlg $Focus }
-        Export-Visuel $dlg $Capture 560 392
+        Export-Fenetre $dlg $Capture
     } elseif ($Applications) {
         $dlgApps = Import-Xaml "Applications.xaml"
         if ($Focus -ne "") { Set-FocusCapture $dlgApps $Focus }
-        Export-Visuel $dlgApps $Capture 620 560
+        Export-Fenetre $dlgApps $Capture
     } elseif ($Etats) {
         $planche = Import-Xaml "Etats.xaml"
         Set-PlancheEtats $planche
-        $taille = Get-TaillePlanche $planche
-        Export-Visuel $planche $Capture $taille.Width $taille.Height
+        Export-Fenetre $planche $Capture
     } else {
         $win = Import-Xaml "Principal.xaml"
         for ($k = 0; $k -le $Etape; $k++) { Set-Scene $win $k }
         if ($Focus -ne "") { Set-FocusCapture $win $Focus }
-        Export-Visuel $win $Capture 1240 1000
+        Export-Fenetre $win $Capture
     }
     Write-Host ("Capture ecrite : " + $Capture)
     return
