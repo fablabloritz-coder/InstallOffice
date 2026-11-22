@@ -239,7 +239,7 @@
           affichent un anneau d'accent hors du cadre, le champ prend une bordure accent, et la case
           comme le radio ajoutent ce même anneau. Le radio se grise désormais une fois désactivé. Les
           glyphes de barre de titre, collés les uns aux autres, portent leur anneau à l'intérieur du
-          bouton, faute de place autour.</TextBlock>
+          bouton, faute de place autour, et s'effacent une fois désactivés comme les autres boutons.</TextBlock>
       </Border>
     </StackPanel>
   </Border>
