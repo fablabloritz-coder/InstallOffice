@@ -9,12 +9,7 @@
         FontFamily="Segoe UI Variable Text, Segoe UI"
         FontSize="13">
   <Window.Resources>
-    <ResourceDictionary>
-      <ResourceDictionary.MergedDictionaries>
-        <ResourceDictionary Source="Styles.xaml"/>
-      </ResourceDictionary.MergedDictionaries>
-
-    </ResourceDictionary>
+    <ResourceDictionary Source="Styles.xaml"/>
   </Window.Resources>
 
   <Border Background="#FFFFFF" CornerRadius="10" BorderBrush="#DEDEDE" BorderThickness="1">
