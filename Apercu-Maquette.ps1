@@ -206,6 +206,20 @@ function Export-Visuel {
     try { $enc.Save($flux) } finally { $flux.Close() }
 }
 
+function Get-TaillePlanche {
+    # La hauteur de la planche n'est pas ecrite : elle suit le nombre de lignes.
+    # Les colonnes de la grille etant proportionnelles, il faut une largeur, et
+    # elle vient de la fenetre (Width dans Etats.xaml) : aucun chiffre ici.
+    param($Fenetre)
+    $largeur = $Fenetre.Width
+    if ([double]::IsNaN($largeur)) {
+        throw "Planche sans largeur : Etats.xaml doit declarer Width, faute de quoi les colonnes proportionnelles ne peuvent pas se repartir."
+    }
+    $l = [int][Math]::Ceiling($largeur)
+    $Fenetre.Content.Measure((New-Object System.Windows.Size($l, [double]::PositiveInfinity)))
+    return @{ Largeur = $l ; Hauteur = [int][Math]::Ceiling($Fenetre.Content.DesiredSize.Height) }
+}
+
 function Show-Reliquat {
     param($Fenetre)
     $dlg = Import-Xaml "ReliquatProxy.xaml"
@@ -424,7 +438,8 @@ if ($Capture -ne "") {
     } elseif ($Etats) {
         $planche = Import-Xaml "Etats.xaml"
         Set-PlancheEtats $planche
-        Export-Visuel $planche $Capture 1216 641
+        $taille = Get-TaillePlanche $planche
+        Export-Visuel $planche $Capture $taille.Largeur $taille.Hauteur
     } else {
         $win = Import-Xaml "Principal.xaml"
         for ($k = 0; $k -le $Etape; $k++) { Set-Scene $win $k }
