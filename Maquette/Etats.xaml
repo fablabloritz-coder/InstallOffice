@@ -19,8 +19,8 @@
                  Foreground="{StaticResource Texte}"/>
       <TextBlock FontSize="12" Foreground="{StaticResource Texte2}" TextWrapping="Wrap"
                  Margin="0,4,0,0">Survol, appui et focus sont forcés sur les propriétés de dépendance
-        (IsMouseOver, IsPressed, IsKeyboardFocusWithin) : les déclencheurs évalués restent ceux du
-        dictionnaire partagé, avec l'héritage de BoutonPrimaire.</TextBlock>
+        que surveillent les gabarits (IsMouseOver, IsPressed, IsKeyboardFocusWithin, IsKeyboardFocused) :
+        les déclencheurs évalués restent ceux du dictionnaire partagé, avec l'héritage de BoutonPrimaire.</TextBlock>
 
       <Grid Margin="0,18,0,0">
         <Grid.ColumnDefinitions>
@@ -161,8 +161,8 @@
         <TextBlock FontSize="12" Foreground="{StaticResource Texte2}" TextWrapping="Wrap">Au survol,
           le primaire reste bleu foncé (#115EA3) : son déclencheur l'emporte sur le gris hérité du
           secondaire. Le bouton de dialogue garde un texte noir. La barre de titre n'a que le survol,
-          et aucun état désactivé. Le champ passe à la bordure accent au focus ; la case à cocher, elle,
-          n'a pas de déclencheur de focus : sa colonne reste identique au repos.</TextBlock>
+          et aucun état désactivé. Au focus clavier, le champ et la case prennent tous deux une bordure
+          accent, comme le bouton radio du même dictionnaire.</TextBlock>
       </Border>
     </StackPanel>
   </Border>

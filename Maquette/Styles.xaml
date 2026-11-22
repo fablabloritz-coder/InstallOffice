@@ -221,6 +221,9 @@
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="box" Property="BorderBrush" Value="{StaticResource Accent}"/>
             </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="box" Property="BorderBrush" Value="{StaticResource Accent}"/>
+            </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.5"/>
             </Trigger>
@@ -252,6 +255,9 @@
               <Setter TargetName="point" Property="Visibility" Value="Visible"/>
             </Trigger>
             <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="cercle" Property="Stroke" Value="{StaticResource Accent}"/>
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
               <Setter TargetName="cercle" Property="Stroke" Value="{StaticResource Accent}"/>
             </Trigger>
           </ControlTemplate.Triggers>
