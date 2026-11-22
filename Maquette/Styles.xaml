@@ -153,7 +153,6 @@
             </Trigger>
             <Trigger Property="IsKeyboardFocusWithin" Value="True">
               <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Accent}"/>
-              <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.5"/>
