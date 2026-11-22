@@ -1,7 +1,7 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Etats des boutons"
-        Width="980" Height="448"
+        Title="Etats des controles"
+        Width="980" Height="508"
         WindowStyle="None" ResizeMode="NoResize"
         WindowStartupLocation="CenterScreen"
         Background="Transparent"
@@ -15,12 +15,12 @@
   <Border Background="{StaticResource Fond}" CornerRadius="10" BorderBrush="#DEDEDE"
           BorderThickness="1" Padding="24,22,24,20">
     <StackPanel>
-      <TextBlock Text="États des boutons" FontSize="20" FontWeight="SemiBold"
+      <TextBlock Text="États des contrôles" FontSize="20" FontWeight="SemiBold"
                  Foreground="{StaticResource Texte}"/>
       <TextBlock FontSize="12" Foreground="{StaticResource Texte2}" TextWrapping="Wrap"
-                 Margin="0,4,0,0">Survol et appui sont forcés sur les propriétés de dépendance
-        (IsMouseOver, IsPressed) : les déclencheurs évalués restent ceux du dictionnaire partagé,
-        avec l'héritage de BoutonPrimaire.</TextBlock>
+                 Margin="0,4,0,0">Survol, appui et focus sont forcés sur les propriétés de dépendance
+        (IsMouseOver, IsPressed, IsKeyboardFocusWithin) : les déclencheurs évalués restent ceux du
+        dictionnaire partagé, avec l'héritage de BoutonPrimaire.</TextBlock>
 
       <Grid Margin="0,18,0,0">
         <Grid.ColumnDefinitions>
@@ -31,6 +31,8 @@
           <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="Auto"/>
@@ -124,6 +126,34 @@
                 Style="{StaticResource BoutonFenetre}" HorizontalAlignment="Center"/>
         <Button Grid.Row="5" Grid.Column="4" x:Name="Fen_Off" Content="&#xE921;"
                 Style="{StaticResource BoutonFenetre}" HorizontalAlignment="Center"/>
+
+        <!-- Champ de saisie : survol gris, focus accent -->
+        <TextBlock Grid.Row="6" Text="Champ de saisie" Style="{StaticResource Etiquette}"
+                   Margin="0,0,0,10"/>
+        <TextBox Grid.Row="6" Grid.Column="1" x:Name="Sai_Repos" Text="proxy.contoso.fr"
+                 Style="{StaticResource Champ}" Width="200" HorizontalAlignment="Center"
+                 Margin="4,0,4,10"/>
+        <TextBox Grid.Row="6" Grid.Column="2" x:Name="Sai_Survol" Text="proxy.contoso.fr"
+                 Style="{StaticResource Champ}" Width="200" HorizontalAlignment="Center"
+                 Margin="4,0,4,10"/>
+        <TextBox Grid.Row="6" Grid.Column="3" x:Name="Sai_Focus" Text="proxy.contoso.fr"
+                 Style="{StaticResource Champ}" Width="200" HorizontalAlignment="Center"
+                 Margin="4,0,4,10"/>
+        <TextBox Grid.Row="6" Grid.Column="4" x:Name="Sai_Off" Text="proxy.contoso.fr"
+                 Style="{StaticResource Champ}" Width="200" HorizontalAlignment="Center"
+                 Margin="4,0,4,10"/>
+
+        <!-- Case a cocher : survol accent, aucun declencheur de focus -->
+        <TextBlock Grid.Row="7" Text="Case à cocher" Style="{StaticResource Etiquette}"
+                   Margin="0,0,0,10"/>
+        <CheckBox Grid.Row="7" Grid.Column="1" x:Name="Chk_Repos" Content="Activer le proxy"
+                  Style="{StaticResource Case}" HorizontalAlignment="Center" Margin="4,0,4,10"/>
+        <CheckBox Grid.Row="7" Grid.Column="2" x:Name="Chk_Survol" Content="Activer le proxy"
+                  Style="{StaticResource Case}" HorizontalAlignment="Center" Margin="4,0,4,10"/>
+        <CheckBox Grid.Row="7" Grid.Column="3" x:Name="Chk_Focus" Content="Activer le proxy"
+                  Style="{StaticResource Case}" HorizontalAlignment="Center" Margin="4,0,4,10"/>
+        <CheckBox Grid.Row="7" Grid.Column="4" x:Name="Chk_Off" Content="Activer le proxy"
+                  Style="{StaticResource Case}" HorizontalAlignment="Center" Margin="4,0,4,10"/>
       </Grid>
 
       <Border Background="#FFFFFF" BorderBrush="{StaticResource Brd}" BorderThickness="1"
@@ -131,7 +161,8 @@
         <TextBlock FontSize="12" Foreground="{StaticResource Texte2}" TextWrapping="Wrap">Au survol,
           le primaire reste bleu foncé (#115EA3) : son déclencheur l'emporte sur le gris hérité du
           secondaire. Le bouton de dialogue garde un texte noir. La barre de titre n'a que le survol,
-          et aucun état désactivé.</TextBlock>
+          et aucun état désactivé. Le champ passe à la bordure accent au focus ; la case à cocher, elle,
+          n'a pas de déclencheur de focus : sa colonne reste identique au repos.</TextBlock>
       </Border>
     </StackPanel>
   </Border>
