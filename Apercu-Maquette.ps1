@@ -301,6 +301,10 @@ function Set-PlancheEtats {
         $bouton.SetValue($appui, $true)
         $Fenetre.FindName("${v}_Off").IsEnabled = $false
     }
+    # Focus des boutons : la barre de titre n'en a pas (glyphes colles, barre rognante).
+    foreach ($v in @("Sec", "Pri", "DlgSec", "DlgPri")) {
+        $Fenetre.FindName("${v}_Focus").SetValue($focusClavier, $true)
+    }
     # Champs et cases : ni appui, mais un focus, chacun sur la propriete que son
     # gabarit surveille (le champ le focus interne, la case le focus direct).
     $Fenetre.FindName("Sai_Focus").SetValue($focusDedans, $true)
@@ -340,7 +344,7 @@ if ($Capture -ne "") {
     } elseif ($Etats) {
         $planche = Import-Xaml "Etats.xaml"
         Set-PlancheEtats $planche
-        Export-Visuel $planche $Capture 980 594
+        Export-Visuel $planche $Capture 1216 595
     } else {
         $win = Import-Xaml "Principal.xaml"
         for ($k = 0; $k -le $Etape; $k++) { Set-Scene $win $k }

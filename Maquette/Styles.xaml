@@ -52,13 +52,24 @@
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
-          <Border Background="{TemplateBinding Background}"
-                  BorderBrush="{TemplateBinding BorderBrush}"
-                  BorderThickness="{TemplateBinding BorderThickness}"
-                  CornerRadius="5">
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
-                              Margin="{TemplateBinding Padding}"/>
-          </Border>
+          <Grid>
+            <!-- Anneau de focus, hors du bouton : il ne depend pas de la couleur
+                 de fond, donc il reste lisible sur le bouton primaire. -->
+            <Border x:Name="anneau" Margin="-3" CornerRadius="8" BorderThickness="2"
+                    BorderBrush="{StaticResource Accent}" Visibility="Collapsed"/>
+            <Border Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="5">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                Margin="{TemplateBinding Padding}"/>
+            </Border>
+          </Grid>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="anneau" Property="Visibility" Value="Visible"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
         </ControlTemplate>
       </Setter.Value>
     </Setter>
@@ -267,6 +278,9 @@
             <Trigger Property="IsKeyboardFocused" Value="True">
               <Setter TargetName="cercle" Property="Stroke" Value="{StaticResource Accent}"/>
               <Setter TargetName="anneau" Property="Visibility" Value="Visible"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Opacity" Value="0.5"/>
             </Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
