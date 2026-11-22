@@ -313,21 +313,23 @@ function Get-CleEtatNommee {
 # Une seule table decrit la planche : par variante, l'etat d'appui (boutons
 # seulement) et l'etat de focus que surveille son gabarit. Une valeur vide dit que
 # la cellule n'existe pas dans Etats.xaml.
-# Suffixes que le forcage ci-dessous ajoute au nom d'une variante : une cellule
-# se reconnait a ce suffixe, et rien d'autre dans la grille n'en est une.
-$suffixesCellules = "Repos", "Survol", "Appui", "Focus", "Off"
+# Une cellule "desactivee" ne force aucune propriete : ce marqueur la distingue.
+$desactive = "eteint"
 
+# Une seule table decrit la planche : par variante, chaque cellule porte son suffixe
+# et les etats a y forcer. Les suffixes sont donc exactement les cles de ces lignes,
+# et le garde comme le forcage les lisent ici.
 $tablePlanche = @(
-    @{ Nom = "Sec"    ; Appui = "IsPressed" ; Focus = "IsKeyboardFocused" }
-    @{ Nom = "Pri"    ; Appui = "IsPressed" ; Focus = "IsKeyboardFocused" }
-    @{ Nom = "DlgSec" ; Appui = "IsPressed" ; Focus = "IsKeyboardFocused" }
-    @{ Nom = "DlgPri" ; Appui = "IsPressed" ; Focus = "IsKeyboardFocused" }
-    @{ Nom = "Fen"    ; Appui = "IsPressed" ; Focus = "" }
-    @{ Nom = "Sai"    ; Appui = ""          ; Focus = "IsKeyboardFocusWithin" }
-    @{ Nom = "Chk"    ; Appui = ""          ; Focus = "IsKeyboardFocused" }
-    @{ Nom = "ChkC"   ; Appui = ""          ; Focus = "IsKeyboardFocused" }
-    @{ Nom = "Opt"    ; Appui = ""          ; Focus = "IsKeyboardFocused" }
-    @{ Nom = "OptC"   ; Appui = ""          ; Focus = "IsKeyboardFocused" }
+    @{ Nom = "Sec"    ; Survol = "IsMouseOver" ; Appui = "IsMouseOver,IsPressed" ; Focus = "IsKeyboardFocused"    ; Off = $desactive }
+    @{ Nom = "Pri"    ; Survol = "IsMouseOver" ; Appui = "IsMouseOver,IsPressed" ; Focus = "IsKeyboardFocused"    ; Off = $desactive }
+    @{ Nom = "DlgSec" ; Survol = "IsMouseOver" ; Appui = "IsMouseOver,IsPressed" ; Focus = "IsKeyboardFocused"    ; Off = $desactive }
+    @{ Nom = "DlgPri" ; Survol = "IsMouseOver" ; Appui = "IsMouseOver,IsPressed" ; Focus = "IsKeyboardFocused"    ; Off = $desactive }
+    @{ Nom = "Fen"    ; Survol = "IsMouseOver" ; Appui = "IsMouseOver,IsPressed" ; Off = $desactive }
+    @{ Nom = "Sai"    ; Survol = "IsMouseOver" ; Focus = "IsKeyboardFocusWithin" ; Off = $desactive }
+    @{ Nom = "Chk"    ; Survol = "IsMouseOver" ; Focus = "IsKeyboardFocused"      ; Off = $desactive }
+    @{ Nom = "ChkC"   ; Survol = "IsMouseOver" ; Focus = "IsKeyboardFocused"      ; Off = $desactive }
+    @{ Nom = "Opt"    ; Survol = "IsMouseOver" ; Focus = "IsKeyboardFocused"      ; Off = $desactive }
+    @{ Nom = "OptC"   ; Survol = "IsMouseOver" ; Focus = "IsKeyboardFocused"      ; Off = $desactive }
 )
 
 function Get-Cellule {
@@ -355,24 +357,25 @@ function Get-NomsSousArbre {
 
 function Set-PlancheEtats {
     param($Fenetre)
-    # Ce que la table attend. Chaque nom est valide avant tout forcage : une cellule
+    # Cellules que la table decrit, validees avant tout forcage : une cellule
     # renommee s'arrete sur un message qui la nomme.
     $attendues = @()
+    $suffixes = @()
     foreach ($ligne in $tablePlanche) {
-        $attendues += "$($ligne.Nom)_Repos", "$($ligne.Nom)_Survol", "$($ligne.Nom)_Off"
-        if ($ligne.Appui) { $attendues += "$($ligne.Nom)_Appui" }
-        if ($ligne.Focus) { $attendues += "$($ligne.Nom)_Focus" }
+        foreach ($suffixe in $ligne.Keys) {
+            if ($suffixe -eq "Nom") { continue }
+            $attendues += "$($ligne.Nom)_$suffixe"
+            if ($suffixes -notcontains $suffixe) { $suffixes += $suffixe }
+        }
     }
     foreach ($nom in $attendues) { [void](Get-Cellule $Fenetre $nom) }
-    # Et ce que le XAML porte en plus : une cellule ajoutee sans ligne dans la table
-    # resterait au repos sans rien signaler.
-    # Le controle ne porte que sur la grille des cellules : un nom ajoute ailleurs
-    # dans la planche (titre, note) ne le concerne pas.
+    # Et ce que la grille porte en plus : un nom d'une autre forme (un libelle) n'est
+    # pas une cellule et ne bloque rien.
     $grille = $Fenetre.FindName("GrilleCellules")
     if ($null -eq $grille) {
         throw "Grille 'GrilleCellules' introuvable : son nom a-t-il change dans Etats.xaml ?"
     }
-    $motif = "_($($suffixesCellules -join '|'))$"
+    $motif = "_($($suffixes -join '|'))$"
     $orphelines = @(Get-NomsSousArbre $grille |
         Where-Object { $_ -match $motif -and $attendues -notcontains $_ })
     if ($orphelines.Count -gt 0) {
@@ -380,18 +383,17 @@ function Set-PlancheEtats {
                ". Ajouter la variante a tablePlanche, sinon son etat ne serait jamais force.")
     }
     foreach ($ligne in $tablePlanche) {
-        $v = $ligne.Nom
-        (Get-Cellule $Fenetre "${v}_Survol").SetValue((Get-CleEtatNommee "IsMouseOver"), $true)
-        $eteinte = Get-Cellule $Fenetre "${v}_Off"
-        $eteinte.IsEnabled = $false
-        if ($ligne.Focus) {
-            (Get-Cellule $Fenetre "${v}_Focus").SetValue((Get-CleEtatNommee $ligne.Focus), $true)
-        }
-        if ($ligne.Appui) {
-            # L'appui cumule le survol : son declencheur passe apres celui du survol.
-            $bouton = Get-Cellule $Fenetre "${v}_Appui"
-            $bouton.SetValue((Get-CleEtatNommee "IsMouseOver"), $true)
-            $bouton.SetValue((Get-CleEtatNommee $ligne.Appui), $true)
+        foreach ($suffixe in $ligne.Keys) {
+            if ($suffixe -eq "Nom") { continue }
+            $cellule = Get-Cellule $Fenetre "$($ligne.Nom)_$suffixe"
+            $etats = $ligne[$suffixe]
+            if ($etats -eq $desactive) {
+                $cellule.IsEnabled = $false
+                continue
+            }
+            foreach ($etat in $etats -split ",") {
+                $cellule.SetValue((Get-CleEtatNommee $etat), $true)
+            }
         }
     }
 }
