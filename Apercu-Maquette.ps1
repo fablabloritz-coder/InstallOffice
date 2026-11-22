@@ -191,42 +191,40 @@ function Reset-Scene {
     $Fenetre.FindName("EtapePourcent").Text = "0 %"
 }
 
-function Export-Visuel {
-    param($Fenetre, [string]$Chemin, [int]$Largeur, [int]$Hauteur)
-    $contenu = $Fenetre.Content
-    $taille  = New-Object System.Windows.Size($Largeur, $Hauteur)
-    $contenu.Measure($taille)
-    $contenu.Arrange((New-Object System.Windows.Rect(0, 0, $Largeur, $Hauteur)))
-    $contenu.UpdateLayout()
-    $bmp = New-Object System.Windows.Media.Imaging.RenderTargetBitmap($Largeur, $Hauteur, 96, 96, [System.Windows.Media.PixelFormats]::Pbgra32)
-    $bmp.Render($contenu)
-    $enc = New-Object System.Windows.Media.Imaging.PngBitmapEncoder
-    $enc.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($bmp))
-    $flux = [System.IO.File]::Open($Chemin, [System.IO.FileMode]::Create)
-    try { $enc.Save($flux) } finally { $flux.Close() }
-}
-
 function Get-TailleCapture {
-    # Taille lue dans le XAML de la fenetre. La planche n'y declare pas de
-    # hauteur (SizeToContent) : elle se mesure sur le contenu, a la largeur de
-    # la fenetre, ses colonnes etant proportionnelles. Arrondi au pixel
-    # superieur : une fraction de pixel de plus rognerait le bas.
+    # Taille de la capture, lue dans le XAML de la fenetre ; la planche n'y
+    # declare pas de hauteur (SizeToContent), elle se mesure alors sur le
+    # contenu, a la largeur de la fenetre, ses colonnes etant proportionnelles.
+    # Arrondi au pixel superieur : une fraction de pixel de plus rognerait le bas.
     param($Fenetre)
     if ([double]::IsNaN($Fenetre.Width)) {
         throw "Capture sans largeur : la fenetre doit declarer Width."
     }
     $largeur = [int][Math]::Ceiling($Fenetre.Width)
-    if (-not [double]::IsNaN($Fenetre.Height)) {
-        return (New-Object System.Windows.Size($largeur, [int][Math]::Ceiling($Fenetre.Height)))
+    $hauteur = $Fenetre.Height
+    if ([double]::IsNaN($hauteur)) {
+        $Fenetre.Content.Measure((New-Object System.Windows.Size($largeur, [double]::PositiveInfinity)))
+        $hauteur = $Fenetre.Content.DesiredSize.Height
     }
-    $Fenetre.Content.Measure((New-Object System.Windows.Size($largeur, [double]::PositiveInfinity)))
-    return (New-Object System.Windows.Size($largeur, [int][Math]::Ceiling($Fenetre.Content.DesiredSize.Height)))
+    return (New-Object System.Windows.Size($largeur, [int][Math]::Ceiling($hauteur)))
 }
 
 function Export-Fenetre {
+    # Rendu hors ecran de la fenetre ; la taille vient de Get-TailleCapture.
     param($Fenetre, [string]$Chemin)
-    $taille = Get-TailleCapture $Fenetre
-    Export-Visuel $Fenetre $Chemin $taille.Width $taille.Height
+    $taille  = Get-TailleCapture $Fenetre
+    $largeur = [int]$taille.Width
+    $hauteur = [int]$taille.Height
+    $contenu = $Fenetre.Content
+    $contenu.Measure($taille)
+    $contenu.Arrange((New-Object System.Windows.Rect(0, 0, $largeur, $hauteur)))
+    $contenu.UpdateLayout()
+    $bmp = New-Object System.Windows.Media.Imaging.RenderTargetBitmap($largeur, $hauteur, 96, 96, [System.Windows.Media.PixelFormats]::Pbgra32)
+    $bmp.Render($contenu)
+    $enc = New-Object System.Windows.Media.Imaging.PngBitmapEncoder
+    $enc.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($bmp))
+    $flux = [System.IO.File]::Open($Chemin, [System.IO.FileMode]::Create)
+    try { $enc.Save($flux) } finally { $flux.Close() }
 }
 
 function Show-Reliquat {
