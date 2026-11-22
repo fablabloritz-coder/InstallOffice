@@ -20,6 +20,7 @@
 #    ... -Capture ... -Etats             (rend la planche en PNG)
 #    ... -Capture ... -Dialogue | -Applications
 #    ... -Capture ... -Focus ChkProxy     (met ce controle en focus avant le rendu)
+#    ... -Capture ... -Horloge 16:30:22   (heure du journal ; figee d'office en capture)
 # ================================================================
 param(
     [string]$Capture = "",
@@ -27,8 +28,24 @@ param(
     [switch]$Applications,
     [switch]$Etats,
     [string]$Focus = "",
+    [ValidatePattern("^(\d{2}:\d{2}:\d{2})?$")]
+    [string]$Horloge = "",
     [int]$Etape = 7
 )
+
+# Journal : en capture l'heure est figee (16:30:22 par defaut, plus 7 s par ligne,
+# ce qui fait tomber "Office installe : 16h32" a 16:32:00) pour que deux rendus de
+# la maquette soient identiques au pixel ; en interactif elle suit l'horloge du poste.
+$baseHorloge = $null
+$heureJournal = if ($Horloge -ne "") { $Horloge } elseif ($Capture -ne "") { "16:30:22" } else { "" }
+if ($heureJournal -ne "") {
+    try {
+        $baseHorloge = [DateTime]::ParseExact($heureJournal, "HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
+    } catch {
+        throw ("Horloge illisible : -Horloge attend HH:mm:ss, recu '" + $heureJournal + "'.")
+    }
+}
+$script:journalLignes = 0
 
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName System.Windows.Forms
@@ -121,7 +138,13 @@ function Add-Journal {
     $ligne.FontFamily = New-Object System.Windows.Media.FontFamily("Cascadia Mono, Consolas")
     $ligne.Foreground = Get-Pinceau $couleur
     $ligne.Margin = New-Object System.Windows.Thickness(0, 1, 0, 1)
-    $ligne.Text = ("{0}  {1}" -f (Get-Date).ToString("HH:mm:ss"), $Texte)
+    $horodatage = Get-Date
+    if ($null -ne $baseHorloge) {
+        $horodatage = $baseHorloge.AddSeconds(7 * $script:journalLignes)
+        $script:journalLignes++
+    }
+    $heure = $horodatage.ToString("HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
+    $ligne.Text = ("{0}  {1}" -f $heure, $Texte)
     [void]$Fenetre.FindName("Journal").Children.Add($ligne)
     $Fenetre.FindName("Defilement").ScrollToEnd()
 }
