@@ -286,21 +286,44 @@ function Get-CleEtat {
     $cle
 }
 
-# Une seule table decrit la planche : chaque variante, l'appui qu'elle porte (les
-# boutons seulement) et la propriete de focus que surveille son gabarit (interne
-# pour le champ, clavier pour les cases et les radios, aucune pour la barre de
-# titre, dont les glyphes colles seraient rognes par la barre).
+# Chaque etat se force sur une propriete en lecture seule precise : c'est le seul
+# endroit ou les noms de champs internes de WPF apparaissent.
+$definitionCles = @{
+    IsMouseOver           = @{ Propriete = [System.Windows.UIElement]::IsMouseOverProperty ; Champ = "IsMouseOverPropertyKey" }
+    IsPressed             = @{ Propriete = [System.Windows.Controls.Primitives.ButtonBase]::IsPressedProperty ; Champ = "IsPressedPropertyKey" }
+    IsKeyboardFocusWithin = @{ Propriete = [System.Windows.UIElement]::IsKeyboardFocusWithinProperty ; Champ = "IsKeyboardFocusWithinPropertyKey" }
+    IsKeyboardFocused     = @{ Propriete = [System.Windows.UIElement]::IsKeyboardFocusedProperty ; Champ = "IsKeyboardFocusedPropertyKey" }
+}
+$clesResolues = @{}
+
+function Get-CleEtatNommee {
+    # Resout une cle a la premiere demande et la garde : un etat qu'aucune variante
+    # ne porte ne declenche aucune lecture de champ interne.
+    param([string]$Etat)
+    if (-not $clesResolues.ContainsKey($Etat)) {
+        $definition = $definitionCles[$Etat]
+        if ($null -eq $definition) {
+            throw "Etat '$Etat' inconnu : la table de la planche demande un etat absent de definitionCles."
+        }
+        $clesResolues[$Etat] = Get-CleEtat $definition.Propriete $definition.Champ
+    }
+    $clesResolues[$Etat]
+}
+
+# Une seule table decrit la planche : par variante, l'etat d'appui (boutons
+# seulement) et l'etat de focus que surveille son gabarit. Une valeur vide dit que
+# la cellule n'existe pas dans Etats.xaml.
 $tablePlanche = @(
-    @{ Nom = "Sec"    ; Appui = $true  ; Focus = "clavier" }
-    @{ Nom = "Pri"    ; Appui = $true  ; Focus = "clavier" }
-    @{ Nom = "DlgSec" ; Appui = $true  ; Focus = "clavier" }
-    @{ Nom = "DlgPri" ; Appui = $true  ; Focus = "clavier" }
-    @{ Nom = "Fen"    ; Appui = $true  ; Focus = "" }
-    @{ Nom = "Sai"    ; Appui = $false ; Focus = "interne" }
-    @{ Nom = "Chk"    ; Appui = $false ; Focus = "clavier" }
-    @{ Nom = "ChkC"   ; Appui = $false ; Focus = "clavier" }
-    @{ Nom = "Opt"    ; Appui = $false ; Focus = "clavier" }
-    @{ Nom = "OptC"   ; Appui = $false ; Focus = "clavier" }
+    @{ Nom = "Sec"    ; Appui = "IsPressed" ; Focus = "IsKeyboardFocused" }
+    @{ Nom = "Pri"    ; Appui = "IsPressed" ; Focus = "IsKeyboardFocused" }
+    @{ Nom = "DlgSec" ; Appui = "IsPressed" ; Focus = "IsKeyboardFocused" }
+    @{ Nom = "DlgPri" ; Appui = "IsPressed" ; Focus = "IsKeyboardFocused" }
+    @{ Nom = "Fen"    ; Appui = "IsPressed" ; Focus = "" }
+    @{ Nom = "Sai"    ; Appui = ""          ; Focus = "IsKeyboardFocusWithin" }
+    @{ Nom = "Chk"    ; Appui = ""          ; Focus = "IsKeyboardFocused" }
+    @{ Nom = "ChkC"   ; Appui = ""          ; Focus = "IsKeyboardFocused" }
+    @{ Nom = "Opt"    ; Appui = ""          ; Focus = "IsKeyboardFocused" }
+    @{ Nom = "OptC"   ; Appui = ""          ; Focus = "IsKeyboardFocused" }
 )
 
 function Get-Cellule {
@@ -314,28 +337,50 @@ function Get-Cellule {
     $cellule
 }
 
+function Get-NomsPlanche {
+    # Noms portes par l'arbre logique : sert a reperer une cellule que la table ignore.
+    param($Element)
+    $noms = @()
+    if ($Element -is [System.Windows.FrameworkElement] -and $Element.Name) {
+        $noms += $Element.Name
+    }
+    foreach ($enfant in [System.Windows.LogicalTreeHelper]::GetChildren($Element)) {
+        if ($enfant -is [System.Windows.DependencyObject]) { $noms += Get-NomsPlanche $enfant }
+    }
+    $noms
+}
+
 function Set-PlancheEtats {
     param($Fenetre)
-    # Resolues ici seulement : sans -Etats, l'apercu ne lit aucun champ interne.
-    $survol = Get-CleEtat ([System.Windows.UIElement]::IsMouseOverProperty) "IsMouseOverPropertyKey"
-    $appui = Get-CleEtat ([System.Windows.Controls.Primitives.ButtonBase]::IsPressedProperty) "IsPressedPropertyKey"
-    $focusDedans = Get-CleEtat ([System.Windows.UIElement]::IsKeyboardFocusWithinProperty) "IsKeyboardFocusWithinPropertyKey"
-    $focusClavier = Get-CleEtat ([System.Windows.UIElement]::IsKeyboardFocusedProperty) "IsKeyboardFocusedPropertyKey"
+    # Ce que la table attend. Chaque nom est valide avant tout forcage : une cellule
+    # renommee s'arrete sur un message qui la nomme.
+    $attendues = @()
+    foreach ($ligne in $tablePlanche) {
+        $attendues += "$($ligne.Nom)_Repos", "$($ligne.Nom)_Survol", "$($ligne.Nom)_Off"
+        if ($ligne.Appui) { $attendues += "$($ligne.Nom)_Appui" }
+        if ($ligne.Focus) { $attendues += "$($ligne.Nom)_Focus" }
+    }
+    foreach ($nom in $attendues) { [void](Get-Cellule $Fenetre $nom) }
+    # Et ce que le XAML porte en plus : une cellule ajoutee sans ligne dans la table
+    # resterait au repos sans rien signaler.
+    $orphelines = @(Get-NomsPlanche $Fenetre | Where-Object { $attendues -notcontains $_ })
+    if ($orphelines.Count -gt 0) {
+        throw ("Cellule(s) de la planche hors table : " + ($orphelines -join ", ") +
+               ". Ajouter la variante a tablePlanche, sinon son etat ne serait jamais force.")
+    }
     foreach ($ligne in $tablePlanche) {
         $v = $ligne.Nom
-        (Get-Cellule $Fenetre "${v}_Survol").SetValue($survol, $true)
+        (Get-Cellule $Fenetre "${v}_Survol").SetValue((Get-CleEtatNommee "IsMouseOver"), $true)
         $eteinte = Get-Cellule $Fenetre "${v}_Off"
         $eteinte.IsEnabled = $false
-        if ($ligne.Focus -eq "interne") {
-            (Get-Cellule $Fenetre "${v}_Focus").SetValue($focusDedans, $true)
-        } elseif ($ligne.Focus -eq "clavier") {
-            (Get-Cellule $Fenetre "${v}_Focus").SetValue($focusClavier, $true)
+        if ($ligne.Focus) {
+            (Get-Cellule $Fenetre "${v}_Focus").SetValue((Get-CleEtatNommee $ligne.Focus), $true)
         }
         if ($ligne.Appui) {
             # L'appui cumule le survol : son declencheur passe apres celui du survol.
             $bouton = Get-Cellule $Fenetre "${v}_Appui"
-            $bouton.SetValue($survol, $true)
-            $bouton.SetValue($appui, $true)
+            $bouton.SetValue((Get-CleEtatNommee "IsMouseOver"), $true)
+            $bouton.SetValue((Get-CleEtatNommee $ligne.Appui), $true)
         }
     }
 }
@@ -348,10 +393,8 @@ function Set-FocusCapture {
     if ($null -eq $controle) {
         throw "Controle '$Nom' introuvable dans la fenetre capturee : -Focus demande un x:Name existant."
     }
-    $dedans = Get-CleEtat ([System.Windows.UIElement]::IsKeyboardFocusWithinProperty) "IsKeyboardFocusWithinPropertyKey"
-    $clavier = Get-CleEtat ([System.Windows.UIElement]::IsKeyboardFocusedProperty) "IsKeyboardFocusedPropertyKey"
-    $controle.SetValue($dedans, $true)
-    $controle.SetValue($clavier, $true)
+    $controle.SetValue((Get-CleEtatNommee "IsKeyboardFocusWithin"), $true)
+    $controle.SetValue((Get-CleEtatNommee "IsKeyboardFocused"), $true)
 }
 
 # --- Mode capture : rendu hors ecran, aucun affichage ----------------------
