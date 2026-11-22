@@ -19,12 +19,14 @@
 #    ... -Etats                         (planche des etats de boutons)
 #    ... -Capture ... -Etats             (rend la planche en PNG)
 #    ... -Capture ... -Dialogue | -Applications
+#    ... -Capture ... -Focus ChkProxy     (met ce controle en focus avant le rendu)
 # ================================================================
 param(
     [string]$Capture = "",
     [switch]$Dialogue,
     [switch]$Applications,
     [switch]$Etats,
+    [string]$Focus = "",
     [int]$Etape = 7
 )
 
@@ -311,12 +313,30 @@ function Set-PlancheEtats {
     }
 }
 
+function Set-FocusCapture {
+    # Met un controle nomme en focus avant une capture, pour voir l'anneau en
+    # contexte. Le nom est verifie : une faute de frappe s'arrete ici.
+    param($Fenetre, [string]$Nom)
+    $controle = $Fenetre.FindName($Nom)
+    if ($null -eq $controle) {
+        throw "Controle '$Nom' introuvable dans la fenetre capturee : -Focus demande un x:Name existant."
+    }
+    $dedans = Get-CleEtat ([System.Windows.UIElement]::IsKeyboardFocusWithinProperty) "IsKeyboardFocusWithinPropertyKey"
+    $clavier = Get-CleEtat ([System.Windows.UIElement]::IsKeyboardFocusedProperty) "IsKeyboardFocusedPropertyKey"
+    $controle.SetValue($dedans, $true)
+    $controle.SetValue($clavier, $true)
+}
+
 # --- Mode capture : rendu hors ecran, aucun affichage ----------------------
 if ($Capture -ne "") {
     if ($Dialogue) {
-        Export-Visuel (Import-Xaml "ReliquatProxy.xaml") $Capture 560 392
+        $dlg = Import-Xaml "ReliquatProxy.xaml"
+        if ($Focus -ne "") { Set-FocusCapture $dlg $Focus }
+        Export-Visuel $dlg $Capture 560 392
     } elseif ($Applications) {
-        Export-Visuel (Import-Xaml "Applications.xaml") $Capture 620 560
+        $dlgApps = Import-Xaml "Applications.xaml"
+        if ($Focus -ne "") { Set-FocusCapture $dlgApps $Focus }
+        Export-Visuel $dlgApps $Capture 620 560
     } elseif ($Etats) {
         $planche = Import-Xaml "Etats.xaml"
         Set-PlancheEtats $planche
@@ -324,6 +344,7 @@ if ($Capture -ne "") {
     } else {
         $win = Import-Xaml "Principal.xaml"
         for ($k = 0; $k -le $Etape; $k++) { Set-Scene $win $k }
+        if ($Focus -ne "") { Set-FocusCapture $win $Focus }
         Export-Visuel $win $Capture 1240 1000
     }
     Write-Host ("Capture ecrite : " + $Capture)
