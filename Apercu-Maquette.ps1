@@ -337,15 +337,18 @@ function Get-Cellule {
     $cellule
 }
 
-function Get-NomsPlanche {
-    # Noms portes par l'arbre logique : sert a reperer une cellule que la table ignore.
+function Get-NomsSousArbre {
+    # Noms portes par les descendants d'un element, parent exclu : sert a reperer
+    # une cellule de la grille que la table ignore.
     param($Element)
     $noms = @()
-    if ($Element -is [System.Windows.FrameworkElement] -and $Element.Name) {
-        $noms += $Element.Name
-    }
     foreach ($enfant in [System.Windows.LogicalTreeHelper]::GetChildren($Element)) {
-        if ($enfant -is [System.Windows.DependencyObject]) { $noms += Get-NomsPlanche $enfant }
+        if ($enfant -is [System.Windows.DependencyObject]) {
+            if ($enfant -is [System.Windows.FrameworkElement] -and $enfant.Name) {
+                $noms += $enfant.Name
+            }
+            $noms += Get-NomsSousArbre $enfant
+        }
     }
     $noms
 }
@@ -363,7 +366,13 @@ function Set-PlancheEtats {
     foreach ($nom in $attendues) { [void](Get-Cellule $Fenetre $nom) }
     # Et ce que le XAML porte en plus : une cellule ajoutee sans ligne dans la table
     # resterait au repos sans rien signaler.
-    $orphelines = @(Get-NomsPlanche $Fenetre | Where-Object { $attendues -notcontains $_ })
+    # Le controle ne porte que sur la grille des cellules : un nom ajoute ailleurs
+    # dans la planche (titre, note) ne le concerne pas.
+    $grille = $Fenetre.FindName("GrilleCellules")
+    if ($null -eq $grille) {
+        throw "Grille 'GrilleCellules' introuvable : son nom a-t-il change dans Etats.xaml ?"
+    }
+    $orphelines = @(Get-NomsSousArbre $grille | Where-Object { $attendues -notcontains $_ })
     if ($orphelines.Count -gt 0) {
         throw ("Cellule(s) de la planche hors table : " + ($orphelines -join ", ") +
                ". Ajouter la variante a tablePlanche, sinon son etat ne serait jamais force.")

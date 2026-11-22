@@ -23,7 +23,7 @@
         les déclencheurs évalués restent ceux du dictionnaire partagé, avec l'héritage de BoutonPrimaire.
         Une cellule vide signifie que le contrôle n'a pas cet état.</TextBlock>
 
-      <Grid Margin="0,18,0,0">
+      <Grid x:Name="GrilleCellules" Margin="0,18,0,0">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="210"/>
           <ColumnDefinition Width="*"/>
