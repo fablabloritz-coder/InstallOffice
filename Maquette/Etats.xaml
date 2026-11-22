@@ -171,81 +171,82 @@
                  Style="{StaticResource Champ}" Width="190" HorizontalAlignment="Center"
                  Margin="4,0,4,10"/>
 
-        <!-- Case a cocher -->
-        <TextBlock Grid.Row="7" Text="Case à cocher" Style="{StaticResource Etiquette}"
+        <!-- Champ secret : survol gris, focus accent, pas d'appui -->
+        <TextBlock Grid.Row="7" Text="Champ secret" Style="{StaticResource Etiquette}"
                    Margin="0,0,0,10"/>
-        <CheckBox Grid.Row="7" Grid.Column="1" x:Name="Chk_Repos" Content="Activer le proxy"
+        <PasswordBox Grid.Row="7" Grid.Column="1" x:Name="Secr_Repos" Password="contoso"
+                     Style="{StaticResource ChampSecret}" Width="190" HorizontalAlignment="Center"
+                     Margin="4,0,4,10"/>
+        <PasswordBox Grid.Row="7" Grid.Column="2" x:Name="Secr_Survol" Password="contoso"
+                     Style="{StaticResource ChampSecret}" Width="190" HorizontalAlignment="Center"
+                     Margin="4,0,4,10"/>
+        <PasswordBox Grid.Row="7" Grid.Column="4" x:Name="Secr_Focus" Password="contoso"
+                     Style="{StaticResource ChampSecret}" Width="190" HorizontalAlignment="Center"
+                     Margin="4,0,4,10"/>
+        <PasswordBox Grid.Row="7" Grid.Column="5" x:Name="Secr_Off" Password="contoso"
+                     Style="{StaticResource ChampSecret}" Width="190" HorizontalAlignment="Center"
+                     Margin="4,0,4,10"/>
+
+        <!-- Case a cocher -->
+        <TextBlock Grid.Row="8" Text="Case à cocher" Style="{StaticResource Etiquette}"
+                   Margin="0,0,0,10"/>
+        <CheckBox Grid.Row="8" Grid.Column="1" x:Name="Chk_Repos" Content="Activer le proxy"
                   Style="{StaticResource Case}" HorizontalAlignment="Center" Margin="4,0,4,10"/>
-        <CheckBox Grid.Row="7" Grid.Column="2" x:Name="Chk_Survol" Content="Activer le proxy"
+        <CheckBox Grid.Row="8" Grid.Column="2" x:Name="Chk_Survol" Content="Activer le proxy"
                   Style="{StaticResource Case}" HorizontalAlignment="Center" Margin="4,0,4,10"/>
-        <CheckBox Grid.Row="7" Grid.Column="4" x:Name="Chk_Focus" Content="Activer le proxy"
+        <CheckBox Grid.Row="8" Grid.Column="4" x:Name="Chk_Focus" Content="Activer le proxy"
                   Style="{StaticResource Case}" HorizontalAlignment="Center" Margin="4,0,4,10"/>
-        <CheckBox Grid.Row="7" Grid.Column="5" x:Name="Chk_Off" Content="Activer le proxy"
+        <CheckBox Grid.Row="8" Grid.Column="5" x:Name="Chk_Off" Content="Activer le proxy"
                   Style="{StaticResource Case}" HorizontalAlignment="Center" Margin="4,0,4,10"/>
 
         <!-- Case cochee : le focus doit rester visible sous le remplissage accent -->
-        <TextBlock Grid.Row="8" Text="Case cochée" Style="{StaticResource Etiquette}"
+        <TextBlock Grid.Row="9" Text="Case cochée" Style="{StaticResource Etiquette}"
                    Margin="0,0,0,10"/>
-        <CheckBox Grid.Row="8" Grid.Column="1" x:Name="ChkC_Repos" Content="Activer le proxy"
+        <CheckBox Grid.Row="9" Grid.Column="1" x:Name="ChkC_Repos" Content="Activer le proxy"
                   IsChecked="True" Style="{StaticResource Case}" HorizontalAlignment="Center"
                   Margin="4,0,4,10"/>
-        <CheckBox Grid.Row="8" Grid.Column="2" x:Name="ChkC_Survol" Content="Activer le proxy"
+        <CheckBox Grid.Row="9" Grid.Column="2" x:Name="ChkC_Survol" Content="Activer le proxy"
                   IsChecked="True" Style="{StaticResource Case}" HorizontalAlignment="Center"
                   Margin="4,0,4,10"/>
-        <CheckBox Grid.Row="8" Grid.Column="4" x:Name="ChkC_Focus" Content="Activer le proxy"
+        <CheckBox Grid.Row="9" Grid.Column="4" x:Name="ChkC_Focus" Content="Activer le proxy"
                   IsChecked="True" Style="{StaticResource Case}" HorizontalAlignment="Center"
                   Margin="4,0,4,10"/>
-        <CheckBox Grid.Row="8" Grid.Column="5" x:Name="ChkC_Off" Content="Activer le proxy"
+        <CheckBox Grid.Row="9" Grid.Column="5" x:Name="ChkC_Off" Content="Activer le proxy"
                   IsChecked="True" Style="{StaticResource Case}" HorizontalAlignment="Center"
                   Margin="4,0,4,10"/>
 
         <!-- Bouton radio : meme anneau de focus que la case. Chaque bouton porte son
              propre GroupName, sinon les instances cochees se decocheraient entre elles. -->
-        <TextBlock Grid.Row="9" Text="Bouton radio" Style="{StaticResource Etiquette}"
+        <TextBlock Grid.Row="10" Text="Bouton radio" Style="{StaticResource Etiquette}"
                    Margin="0,0,0,10"/>
-        <RadioButton Grid.Row="9" Grid.Column="1" x:Name="Opt_Repos" Content="Automatique"
+        <RadioButton Grid.Row="10" Grid.Column="1" x:Name="Opt_Repos" Content="Automatique"
                      GroupName="Opt_Repos" Style="{StaticResource Option}" HorizontalAlignment="Center"
                      Margin="4,0,4,10"/>
-        <RadioButton Grid.Row="9" Grid.Column="2" x:Name="Opt_Survol" Content="Automatique"
+        <RadioButton Grid.Row="10" Grid.Column="2" x:Name="Opt_Survol" Content="Automatique"
                      GroupName="Opt_Survol" Style="{StaticResource Option}" HorizontalAlignment="Center"
                      Margin="4,0,4,10"/>
-        <RadioButton Grid.Row="9" Grid.Column="4" x:Name="Opt_Focus" Content="Automatique"
+        <RadioButton Grid.Row="10" Grid.Column="4" x:Name="Opt_Focus" Content="Automatique"
                      GroupName="Opt_Focus" Style="{StaticResource Option}" HorizontalAlignment="Center"
                      Margin="4,0,4,10"/>
-        <RadioButton Grid.Row="9" Grid.Column="5" x:Name="Opt_Off" Content="Automatique"
+        <RadioButton Grid.Row="10" Grid.Column="5" x:Name="Opt_Off" Content="Automatique"
                      GroupName="Opt_Off" Style="{StaticResource Option}" HorizontalAlignment="Center"
                      Margin="4,0,4,10"/>
 
         <!-- Bouton radio selectionne : le focus doit rester visible sous le point accent -->
-        <TextBlock Grid.Row="10" Text="Bouton radio sélectionné" Style="{StaticResource Etiquette}"/>
-        <RadioButton Grid.Row="10" Grid.Column="1" x:Name="OptC_Repos" Content="Automatique"
+        <TextBlock Grid.Row="11" Text="Bouton radio sélectionné" Style="{StaticResource Etiquette}"/>
+        <RadioButton Grid.Row="11" Grid.Column="1" x:Name="OptC_Repos" Content="Automatique"
                      GroupName="OptC_Repos" IsChecked="True" Style="{StaticResource Option}"
                      HorizontalAlignment="Center" Margin="4,0,4,0"/>
-        <RadioButton Grid.Row="10" Grid.Column="2" x:Name="OptC_Survol" Content="Automatique"
+        <RadioButton Grid.Row="11" Grid.Column="2" x:Name="OptC_Survol" Content="Automatique"
                      GroupName="OptC_Survol" IsChecked="True" Style="{StaticResource Option}"
                      HorizontalAlignment="Center" Margin="4,0,4,0"/>
-        <RadioButton Grid.Row="10" Grid.Column="4" x:Name="OptC_Focus" Content="Automatique"
+        <RadioButton Grid.Row="11" Grid.Column="4" x:Name="OptC_Focus" Content="Automatique"
                      GroupName="OptC_Focus" IsChecked="True" Style="{StaticResource Option}"
                      HorizontalAlignment="Center" Margin="4,0,4,0"/>
-        <RadioButton Grid.Row="10" Grid.Column="5" x:Name="OptC_Off" Content="Automatique"
+        <RadioButton Grid.Row="11" Grid.Column="5" x:Name="OptC_Off" Content="Automatique"
                      GroupName="OptC_Off" IsChecked="True" Style="{StaticResource Option}"
                      HorizontalAlignment="Center" Margin="4,0,4,0"/>
 
-        <!-- Champ secret : survol gris, focus accent, pas d'appui -->
-        <TextBlock Grid.Row="11" Text="Champ secret" Style="{StaticResource Etiquette}"
-                   Margin="0,10,0,0"/>
-        <PasswordBox Grid.Row="11" Grid.Column="1" x:Name="Secr_Repos" Password="contoso"
-                     Style="{StaticResource ChampSecret}" Width="190" HorizontalAlignment="Center"
-                     Margin="4,10,4,0"/>
-        <PasswordBox Grid.Row="11" Grid.Column="2" x:Name="Secr_Survol" Password="contoso"
-                     Style="{StaticResource ChampSecret}" Width="190" HorizontalAlignment="Center"
-                     Margin="4,10,4,0"/>
-        <PasswordBox Grid.Row="11" Grid.Column="4" x:Name="Secr_Focus" Password="contoso"
-                     Style="{StaticResource ChampSecret}" Width="190" HorizontalAlignment="Center"
-                     Margin="4,10,4,0"/>
-        <PasswordBox Grid.Row="11" Grid.Column="5" x:Name="Secr_Off" Password="contoso"
-                     Style="{StaticResource ChampSecret}" Width="190" HorizontalAlignment="Center"
-                     Margin="4,10,4,0"/>
       </Grid>
 
       <Border Background="#FFFFFF" BorderBrush="{StaticResource Brd}" BorderThickness="1"
