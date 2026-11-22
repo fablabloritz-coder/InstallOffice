@@ -289,7 +289,7 @@ function Set-PlancheEtats {
     # Resolues ici seulement : sans -Etats, l'apercu ne lit aucun champ interne.
     $survol = Get-CleEtat ([System.Windows.UIElement]::IsMouseOverProperty) "IsMouseOverPropertyKey"
     $appui = Get-CleEtat ([System.Windows.Controls.Primitives.ButtonBase]::IsPressedProperty) "IsPressedPropertyKey"
-    $focus = Get-CleEtat ([System.Windows.UIElement]::IsKeyboardFocusWithinProperty) "IsKeyboardFocusWithinPropertyKey"
+    $focusDedans = Get-CleEtat ([System.Windows.UIElement]::IsKeyboardFocusWithinProperty) "IsKeyboardFocusWithinPropertyKey"
     $focusClavier = Get-CleEtat ([System.Windows.UIElement]::IsKeyboardFocusedProperty) "IsKeyboardFocusedPropertyKey"
     # Boutons : survol, puis appui (qui ajoute son propre declencheur au survol).
     foreach ($v in @("Sec", "Pri", "DlgSec", "DlgPri", "Fen")) {
@@ -299,12 +299,12 @@ function Set-PlancheEtats {
         $bouton.SetValue($appui, $true)
         $Fenetre.FindName("${v}_Off").IsEnabled = $false
     }
-    # Champs et cases : ni appui, mais un etat de focus a montrer.
+    # Champs et cases : ni appui, mais un focus, chacun sur la propriete que son
+    # gabarit surveille (le champ le focus interne, la case le focus direct).
+    $Fenetre.FindName("Sai_Focus").SetValue($focusDedans, $true)
+    $Fenetre.FindName("Chk_Focus").SetValue($focusClavier, $true)
     foreach ($v in @("Sai", "Chk")) {
         $Fenetre.FindName("${v}_Survol").SetValue($survol, $true)
-        $cellule = $Fenetre.FindName("${v}_Focus")
-        $cellule.SetValue($focus, $true)
-        $cellule.SetValue($focusClavier, $true)
         $Fenetre.FindName("${v}_Off").IsEnabled = $false
     }
 }
