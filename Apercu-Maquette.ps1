@@ -289,11 +289,19 @@ function Set-PlancheEtats {
     # Resolues ici seulement : sans -Etats, l'apercu ne lit aucun champ interne.
     $survol = Get-CleEtat ([System.Windows.UIElement]::IsMouseOverProperty) "IsMouseOverPropertyKey"
     $appui = Get-CleEtat ([System.Windows.Controls.Primitives.ButtonBase]::IsPressedProperty) "IsPressedPropertyKey"
+    $focus = Get-CleEtat ([System.Windows.UIElement]::IsKeyboardFocusWithinProperty) "IsKeyboardFocusWithinPropertyKey"
+    # Boutons : survol, puis appui (qui ajoute son propre declencheur au survol).
     foreach ($v in @("Sec", "Pri", "DlgSec", "DlgPri", "Fen")) {
         $Fenetre.FindName("${v}_Survol").SetValue($survol, $true)
         $bouton = $Fenetre.FindName("${v}_Appui")
         $bouton.SetValue($survol, $true)
         $bouton.SetValue($appui, $true)
+        $Fenetre.FindName("${v}_Off").IsEnabled = $false
+    }
+    # Champs et cases : ni appui, mais un etat de focus a montrer.
+    foreach ($v in @("Sai", "Chk")) {
+        $Fenetre.FindName("${v}_Survol").SetValue($survol, $true)
+        $Fenetre.FindName("${v}_Focus").SetValue($focus, $true)
         $Fenetre.FindName("${v}_Off").IsEnabled = $false
     }
 }
@@ -307,7 +315,7 @@ if ($Capture -ne "") {
     } elseif ($Etats) {
         $planche = Import-Xaml "Etats.xaml"
         Set-PlancheEtats $planche
-        Export-Visuel $planche $Capture 980 448
+        Export-Visuel $planche $Capture 980 508
     } else {
         $win = Import-Xaml "Principal.xaml"
         for ($k = 0; $k -le $Etape; $k++) { Set-Scene $win $k }
