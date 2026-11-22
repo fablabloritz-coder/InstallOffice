@@ -324,7 +324,7 @@ $tablePlanche = @(
     @{ Nom = "Pri"    ; Survol = "IsMouseOver" ; Appui = "IsMouseOver,IsPressed" ; Focus = "IsKeyboardFocused"    ; Off = $desactive }
     @{ Nom = "DlgSec" ; Survol = "IsMouseOver" ; Appui = "IsMouseOver,IsPressed" ; Focus = "IsKeyboardFocused"    ; Off = $desactive }
     @{ Nom = "DlgPri" ; Survol = "IsMouseOver" ; Appui = "IsMouseOver,IsPressed" ; Focus = "IsKeyboardFocused"    ; Off = $desactive }
-    @{ Nom = "Fen"    ; Survol = "IsMouseOver" ; Appui = "IsMouseOver,IsPressed" ; Off = $desactive }
+    @{ Nom = "Fen"    ; Survol = "IsMouseOver" ; Appui = "IsMouseOver,IsPressed" ; Focus = "IsKeyboardFocused" ; Off = $desactive }
     @{ Nom = "Sai"    ; Survol = "IsMouseOver" ; Focus = "IsKeyboardFocusWithin" ; Off = $desactive }
     @{ Nom = "Chk"    ; Survol = "IsMouseOver" ; Focus = "IsKeyboardFocused"      ; Off = $desactive }
     @{ Nom = "ChkC"   ; Survol = "IsMouseOver" ; Focus = "IsKeyboardFocused"      ; Off = $desactive }
