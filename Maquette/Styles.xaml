@@ -62,7 +62,9 @@
       </Trigger>
     </Style.Triggers>
   </Style>
-  <Style x:Key="Bouton" TargetType="Button" BasedOn="{StaticResource BoutonBase}">
+  <!-- Secondaire : fond clair, survol gris, appui plus soutenu. Un dialogue qui veut
+       le noir du systeme pose Foreground="#000000" sur le bouton. -->
+  <Style x:Key="BoutonSecondaire" TargetType="Button" BasedOn="{StaticResource BoutonBase}">
     <Setter Property="Foreground" Value="{StaticResource Texte}"/>
     <Style.Triggers>
       <Trigger Property="IsMouseOver" Value="True">
@@ -70,13 +72,6 @@
       </Trigger>
       <Trigger Property="IsPressed" Value="True">
         <Setter Property="Background" Value="#EDEDED"/>
-      </Trigger>
-    </Style.Triggers>
-  </Style>
-  <Style x:Key="BoutonSecondaire" TargetType="Button" BasedOn="{StaticResource BoutonBase}">
-    <Style.Triggers>
-      <Trigger Property="IsMouseOver" Value="True">
-        <Setter Property="Background" Value="#F5F5F5"/>
       </Trigger>
     </Style.Triggers>
   </Style>

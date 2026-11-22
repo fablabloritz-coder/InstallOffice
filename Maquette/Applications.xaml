@@ -90,7 +90,7 @@
                      FontSize="12" Foreground="#8A8A8A" VerticalAlignment="Center"/>
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
             <Button x:Name="BtnAnnuler" Style="{StaticResource BoutonSecondaire}"
-                    Content="Annuler"/>
+                    Content="Annuler" Foreground="#000000"/>
             <Button x:Name="BtnAppliquer" Style="{StaticResource BoutonPrimaire}"
                     Content="Appliquer" Margin="10,0,0,0"/>
           </StackPanel>
