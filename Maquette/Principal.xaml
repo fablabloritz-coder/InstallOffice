@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         Title="Deploiement Office 2024"
-        Width="1120" Height="828"
+        Width="1240" Height="1000"
         WindowStyle="None" ResizeMode="NoResize"
         WindowStartupLocation="CenterScreen"
         Background="Transparent"
@@ -19,18 +19,20 @@
     <SolidColorBrush x:Key="AccentFonce" Color="#115EA3"/>
     <SolidColorBrush x:Key="Succes" Color="#0F7B0F"/>
     <SolidColorBrush x:Key="Piste" Color="#EBEBEB"/>
+    <SolidColorBrush x:Key="ChampBord" Color="#D6D6D6"/>
     <!-- Libelles d'etat : portes par le XAML (UTF-8), le script reste en ASCII. -->
     <sys:String x:Key="EtatAttente">En attente</sys:String>
     <sys:String x:Key="EtatEncours">En cours</sys:String>
     <sys:String x:Key="EtatTermine">Terminé</sys:String>
     <sys:String x:Key="EtatSaute">Ignoré</sys:String>
     <sys:String x:Key="EtatErreur">Échec</sys:String>
+
     <Style x:Key="Carte" TargetType="Border">
       <Setter Property="Background" Value="{StaticResource FondCarte}"/>
       <Setter Property="BorderBrush" Value="{StaticResource Brd}"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="CornerRadius" Value="8"/>
-      <Setter Property="Padding" Value="18,14,18,16"/>
+      <Setter Property="Padding" Value="16,12,16,14"/>
     </Style>
     <Style x:Key="TitreCarte" TargetType="TextBlock">
       <Setter Property="FontSize" Value="14"/>
@@ -41,12 +43,18 @@
       <Setter Property="Foreground" Value="{StaticResource Texte2}"/>
       <Setter Property="FontSize" Value="12"/>
     </Style>
+    <Style x:Key="Etiquette" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource Texte}"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
     <!-- Un seul gabarit : les etats changent Background, que le gabarit lie par
          TemplateBinding. Les variantes ne redefinissent que des couleurs. -->
     <Style x:Key="BoutonBase" TargetType="Button">
       <Setter Property="Foreground" Value="{StaticResource Texte}"/>
       <Setter Property="Background" Value="#FFFFFF"/>
-      <Setter Property="BorderBrush" Value="#D6D6D6"/>
+      <Setter Property="BorderBrush" Value="{StaticResource ChampBord}"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="Padding" Value="14,7"/>
       <Setter Property="Cursor" Value="Hand"/>
@@ -117,22 +125,163 @@
       </Setter>
     </Style>
     <Style x:Key="Puce" TargetType="Border">
-      <Setter Property="Width" Value="30"/>
-      <Setter Property="Height" Value="30"/>
-      <Setter Property="CornerRadius" Value="15"/>
+      <Setter Property="Width" Value="32"/>
+      <Setter Property="Height" Value="32"/>
+      <Setter Property="CornerRadius" Value="16"/>
       <Setter Property="Background" Value="#EDEDED"/>
-      <Setter Property="VerticalAlignment" Value="Top"/>
     </Style>
     <Style x:Key="GlyphePuce" TargetType="TextBlock">
       <Setter Property="FontSize" Value="12"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
-      <Setter Property="Foreground" Value="#8A8A8A"/>
       <Setter Property="HorizontalAlignment" Value="Center"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="Foreground" Value="#8A8A8A"/>
+    </Style>
+
+    <!-- Champ de saisie -->
+    <Style x:Key="Champ" TargetType="TextBox">
+      <Setter Property="Background" Value="#FFFFFF"/>
+      <Setter Property="BorderBrush" Value="{StaticResource ChampBord}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Foreground" Value="{StaticResource Texte}"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Padding" Value="8,5"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TextBox">
+            <Border x:Name="bd" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="4">
+              <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
+                            VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bd" Property="BorderBrush" Value="#BDBDBD"/>
+              </Trigger>
+              <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.5"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="ChampSecret" TargetType="PasswordBox">
+      <Setter Property="Background" Value="#FFFFFF"/>
+      <Setter Property="BorderBrush" Value="{StaticResource ChampBord}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Foreground" Value="{StaticResource Texte}"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Padding" Value="8,5"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="PasswordBox">
+            <Border x:Name="bd" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="4">
+              <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
+                            VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Accent}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.5"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Case a cocher -->
+    <Style x:Key="Case" TargetType="CheckBox">
+      <Setter Property="Foreground" Value="{StaticResource Texte}"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="CheckBox">
+            <StackPanel Orientation="Horizontal" Background="Transparent">
+              <Border x:Name="box" Width="16" Height="16" CornerRadius="3"
+                      Background="#FFFFFF" BorderBrush="#8A8A8A" BorderThickness="1"
+                      VerticalAlignment="Center">
+                <TextBlock x:Name="mark" Text="&#xE73E;" FontFamily="Segoe MDL2 Assets"
+                           FontSize="10" Foreground="#FFFFFF" Visibility="Collapsed"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              </Border>
+              <ContentPresenter Margin="8,0,0,0" VerticalAlignment="Center"/>
+            </StackPanel>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="box" Property="Background" Value="{StaticResource Accent}"/>
+                <Setter TargetName="box" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                <Setter TargetName="mark" Property="Visibility" Value="Visible"/>
+              </Trigger>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="box" Property="BorderBrush" Value="{StaticResource Accent}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.5"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Bouton radio -->
+    <Style x:Key="Option" TargetType="RadioButton">
+      <Setter Property="Foreground" Value="{StaticResource Texte}"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RadioButton">
+            <StackPanel Orientation="Horizontal" Background="Transparent">
+              <Grid Width="16" Height="16" VerticalAlignment="Center">
+                <Ellipse x:Name="cercle" Stroke="#8A8A8A" StrokeThickness="1" Fill="#FFFFFF"/>
+                <Ellipse x:Name="point" Width="8" Height="8" Fill="{StaticResource Accent}"
+                         Visibility="Collapsed"/>
+              </Grid>
+              <ContentPresenter Margin="8,0,0,0" VerticalAlignment="Center"/>
+            </StackPanel>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="cercle" Property="Stroke" Value="{StaticResource Accent}"/>
+                <Setter TargetName="point" Property="Visibility" Value="Visible"/>
+              </Trigger>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="cercle" Property="Stroke" Value="{StaticResource Accent}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Selecteur (liste deroulante simulee : l'apercu fait defiler les valeurs) -->
+    <Style x:Key="Selecteur" TargetType="Border">
+      <Setter Property="Background" Value="#FFFFFF"/>
+      <Setter Property="BorderBrush" Value="{StaticResource ChampBord}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="4"/>
+      <Setter Property="Padding" Value="8,4"/>
+      <Setter Property="Cursor" Value="Hand"/>
     </Style>
   </Window.Resources>
 
-  <Border x:Name="Cadre" Background="{StaticResource Fond}" CornerRadius="10"
+  <Border Background="{StaticResource Fond}" CornerRadius="10"
           BorderBrush="#DEDEDE" BorderThickness="1">
     <Grid>
       <Grid.RowDefinitions>
@@ -174,12 +323,20 @@
       <!-- Contenu -->
       <Grid Grid.Row="1" Margin="18,4,18,10">
         <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="1.55*"/>
-          <ColumnDefinition Width="18"/>
+          <ColumnDefinition Width="1.15*"/>
+          <ColumnDefinition Width="16"/>
           <ColumnDefinition Width="1*"/>
         </Grid.ColumnDefinitions>
 
-        <StackPanel Grid.Column="0">
+        <Grid Grid.Column="0">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="14"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="14"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+
           <!-- Progression -->
           <Border Style="{StaticResource Carte}">
             <StackPanel>
@@ -191,111 +348,76 @@
                 </StackPanel>
               </Grid>
 
-              <StackPanel Margin="0,14,0,0">
-                <Grid Margin="0,0,0,12">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                  </Grid.ColumnDefinitions>
-                  <Border x:Name="Etape1" Style="{StaticResource Puce}">
-                    <TextBlock x:Name="Glyphe1" Text="1" Style="{StaticResource GlyphePuce}"
-                               Foreground="#FFFFFF"/>
-                  </Border>
-                  <StackPanel Grid.Column="1" Margin="12,1,0,0">
-                    <TextBlock x:Name="Titre1" Text="Désinstallation" FontWeight="SemiBold"
-                               Foreground="{StaticResource Texte}"/>
-                    <TextBlock Text="Retrait des versions précédentes d'Office"
-                               Style="{StaticResource Secondaire}" Margin="0,2,0,0"/>
+              <Grid Margin="0,16,0,0">
+                <Border Height="2" Background="#EDEDED" VerticalAlignment="Top"
+                        Margin="52,15,52,0"/>
+                <UniformGrid Columns="5">
+                  <StackPanel>
+                    <Border x:Name="Etape1" Style="{StaticResource Puce}" HorizontalAlignment="Center">
+                      <TextBlock x:Name="Glyphe1" Text="1" Style="{StaticResource GlyphePuce}"
+                                 Foreground="#FFFFFF"/>
+                    </Border>
+                    <TextBlock x:Name="Titre1" Text="Désinstallation" FontSize="12" FontWeight="SemiBold"
+                               Foreground="{StaticResource Texte}" HorizontalAlignment="Center"
+                               Margin="0,8,0,0"/>
+                    <TextBlock x:Name="Etat1" Text="En attente" FontSize="11"
+                               Foreground="{StaticResource Texte2}" HorizontalAlignment="Center"
+                               Margin="0,2,0,0"/>
                   </StackPanel>
-                  <TextBlock x:Name="Etat1" Grid.Column="2" Text="En attente"
-                             Style="{StaticResource Secondaire}" VerticalAlignment="Center"/>
-                </Grid>
-
-                <Grid Margin="0,0,0,12">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                  </Grid.ColumnDefinitions>
-                  <Border x:Name="Etape2" Style="{StaticResource Puce}">
-                    <TextBlock x:Name="Glyphe2" Text="2" Style="{StaticResource GlyphePuce}"
-                               Foreground="#FFFFFF"/>
-                  </Border>
-                  <StackPanel Grid.Column="1" Margin="12,1,0,0">
-                    <TextBlock x:Name="Titre2" Text="Préparation" FontWeight="SemiBold"
-                               Foreground="{StaticResource Texte}"/>
-                    <TextBlock Text="Vérifications pré-vol, configuration ODT"
-                               Style="{StaticResource Secondaire}" Margin="0,2,0,0"/>
+                  <StackPanel>
+                    <Border x:Name="Etape2" Style="{StaticResource Puce}" HorizontalAlignment="Center">
+                      <TextBlock x:Name="Glyphe2" Text="2" Style="{StaticResource GlyphePuce}"
+                                 Foreground="#FFFFFF"/>
+                    </Border>
+                    <TextBlock x:Name="Titre2" Text="Préparation" FontSize="12" FontWeight="SemiBold"
+                               Foreground="{StaticResource Texte}" HorizontalAlignment="Center"
+                               Margin="0,8,0,0"/>
+                    <TextBlock x:Name="Etat2" Text="En attente" FontSize="11"
+                               Foreground="{StaticResource Texte2}" HorizontalAlignment="Center"
+                               Margin="0,2,0,0"/>
                   </StackPanel>
-                  <TextBlock x:Name="Etat2" Grid.Column="2" Text="En attente"
-                             Style="{StaticResource Secondaire}" VerticalAlignment="Center"/>
-                </Grid>
-
-                <Grid Margin="0,0,0,12">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                  </Grid.ColumnDefinitions>
-                  <Border x:Name="Etape3" Style="{StaticResource Puce}">
-                    <TextBlock x:Name="Glyphe3" Text="3" Style="{StaticResource GlyphePuce}"
-                               Foreground="#FFFFFF"/>
-                  </Border>
-                  <StackPanel Grid.Column="1" Margin="12,1,0,0">
-                    <TextBlock x:Name="Titre3" Text="Sources" FontWeight="SemiBold"
-                               Foreground="{StaticResource Texte}"/>
-                    <TextBlock Text="Copie du dépôt ou téléchargement par setup.exe"
-                               Style="{StaticResource Secondaire}" Margin="0,2,0,0"/>
+                  <StackPanel>
+                    <Border x:Name="Etape3" Style="{StaticResource Puce}" HorizontalAlignment="Center">
+                      <TextBlock x:Name="Glyphe3" Text="3" Style="{StaticResource GlyphePuce}"
+                                 Foreground="#FFFFFF"/>
+                    </Border>
+                    <TextBlock x:Name="Titre3" Text="Sources" FontSize="12" FontWeight="SemiBold"
+                               Foreground="{StaticResource Texte}" HorizontalAlignment="Center"
+                               Margin="0,8,0,0"/>
+                    <TextBlock x:Name="Etat3" Text="En attente" FontSize="11"
+                               Foreground="{StaticResource Texte2}" HorizontalAlignment="Center"
+                               Margin="0,2,0,0"/>
                   </StackPanel>
-                  <TextBlock x:Name="Etat3" Grid.Column="2" Text="En attente"
-                             Style="{StaticResource Secondaire}" VerticalAlignment="Center"/>
-                </Grid>
-
-                <Grid Margin="0,0,0,12">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                  </Grid.ColumnDefinitions>
-                  <Border x:Name="Etape4" Style="{StaticResource Puce}">
-                    <TextBlock x:Name="Glyphe4" Text="4" Style="{StaticResource GlyphePuce}"
-                               Foreground="#FFFFFF"/>
-                  </Border>
-                  <StackPanel Grid.Column="1" Margin="12,1,0,0">
-                    <TextBlock x:Name="Titre4" Text="Installation" FontWeight="SemiBold"
-                               Foreground="{StaticResource Texte}"/>
-                    <TextBlock Text="Click-to-Run en mode silencieux"
-                               Style="{StaticResource Secondaire}" Margin="0,2,0,0"/>
+                  <StackPanel>
+                    <Border x:Name="Etape4" Style="{StaticResource Puce}" HorizontalAlignment="Center">
+                      <TextBlock x:Name="Glyphe4" Text="4" Style="{StaticResource GlyphePuce}"
+                                 Foreground="#FFFFFF"/>
+                    </Border>
+                    <TextBlock x:Name="Titre4" Text="Installation" FontSize="12" FontWeight="SemiBold"
+                               Foreground="{StaticResource Texte}" HorizontalAlignment="Center"
+                               Margin="0,8,0,0"/>
+                    <TextBlock x:Name="Etat4" Text="En attente" FontSize="11"
+                               Foreground="{StaticResource Texte2}" HorizontalAlignment="Center"
+                               Margin="0,2,0,0"/>
                   </StackPanel>
-                  <TextBlock x:Name="Etat4" Grid.Column="2" Text="En attente"
-                             Style="{StaticResource Secondaire}" VerticalAlignment="Center"/>
-                </Grid>
-
-                <Grid>
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                  </Grid.ColumnDefinitions>
-                  <Border x:Name="Etape5" Style="{StaticResource Puce}">
-                    <TextBlock x:Name="Glyphe5" Text="5" Style="{StaticResource GlyphePuce}"
-                               Foreground="#FFFFFF"/>
-                  </Border>
-                  <StackPanel Grid.Column="1" Margin="12,1,0,0">
-                    <TextBlock x:Name="Titre5" Text="Activation KMS" FontWeight="SemiBold"
-                               Foreground="{StaticResource Texte}"/>
-                    <TextBlock Text="ospp.vbs sur le serveur de l'académie"
-                               Style="{StaticResource Secondaire}" Margin="0,2,0,0"/>
+                  <StackPanel>
+                    <Border x:Name="Etape5" Style="{StaticResource Puce}" HorizontalAlignment="Center">
+                      <TextBlock x:Name="Glyphe5" Text="5" Style="{StaticResource GlyphePuce}"
+                                 Foreground="#FFFFFF"/>
+                    </Border>
+                    <TextBlock x:Name="Titre5" Text="Activation KMS" FontSize="12" FontWeight="SemiBold"
+                               Foreground="{StaticResource Texte}" HorizontalAlignment="Center"
+                               Margin="0,8,0,0"/>
+                    <TextBlock x:Name="Etat5" Text="En attente" FontSize="11"
+                               Foreground="{StaticResource Texte2}" HorizontalAlignment="Center"
+                               Margin="0,2,0,0"/>
                   </StackPanel>
-                  <TextBlock x:Name="Etat5" Grid.Column="2" Text="En attente"
-                             Style="{StaticResource Secondaire}" VerticalAlignment="Center"/>
-                </Grid>
-              </StackPanel>
+                </UniformGrid>
+              </Grid>
 
               <ProgressBar x:Name="Jauge" Height="6" Minimum="0" Maximum="100" Value="0"
                            Foreground="{StaticResource Accent}" Background="{StaticResource Piste}"
-                           BorderThickness="0" Margin="0,16,0,0">
+                           BorderThickness="0" Margin="0,18,0,0">
                 <ProgressBar.Template>
                   <ControlTemplate TargetType="ProgressBar">
                     <Border Background="{TemplateBinding Background}" CornerRadius="3">
@@ -310,16 +432,61 @@
               </ProgressBar>
 
               <Grid Margin="0,10,0,0">
-                <TextBlock x:Name="StatutTexte" Text="Pret." FontWeight="SemiBold"
+                <TextBlock x:Name="StatutTexte" Text="Prêt." FontWeight="SemiBold"
                            Foreground="{StaticResource Texte}"/>
-                <TextBlock x:Name="StatutDetail" Text="Aucun deploiement en cours"
+                <TextBlock x:Name="StatutDetail" Text="Aucun déploiement en cours"
                            Style="{StaticResource Secondaire}" HorizontalAlignment="Right"/>
               </Grid>
             </StackPanel>
           </Border>
 
+          <!-- Pre-vol -->
+          <Border Grid.Row="2" Style="{StaticResource Carte}">
+            <StackPanel>
+              <Grid>
+                <TextBlock Text="Vérifications pré-vol" Style="{StaticResource TitreCarte}"/>
+                <Button x:Name="BtnRafraichir" Style="{StaticResource Bouton}" Content="Rafraîchir"
+                        Padding="10,2" FontSize="12" HorizontalAlignment="Right"/>
+              </Grid>
+              <UniformGrid Columns="2" Margin="0,12,0,0">
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                  <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                             Foreground="{StaticResource Succes}" VerticalAlignment="Center"/>
+                  <TextBlock Text="setup.exe" Margin="8,0,0,0" FontSize="12" VerticalAlignment="Center"/>
+                  <TextBlock Text="Présent" Style="{StaticResource Secondaire}" Margin="8,0,0,0"
+                             VerticalAlignment="Center"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                  <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                             Foreground="{StaticResource Succes}" VerticalAlignment="Center"/>
+                  <TextBlock Text="Espace disque" Margin="8,0,0,0" FontSize="12" VerticalAlignment="Center"/>
+                  <TextBlock Text="212 Go" Style="{StaticResource Secondaire}" Margin="8,0,0,0"
+                             VerticalAlignment="Center"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                             Foreground="{StaticResource Succes}" VerticalAlignment="Center"/>
+                  <TextBlock Text="Réseau" Margin="8,0,0,0" FontSize="12" VerticalAlignment="Center"/>
+                  <TextBlock Text="KMS joignable" Style="{StaticResource Secondaire}" Margin="8,0,0,0"
+                             VerticalAlignment="Center"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                             Foreground="{StaticResource Succes}" VerticalAlignment="Center"/>
+                  <TextBlock Text="Windows" Margin="8,0,0,0" FontSize="12" VerticalAlignment="Center"/>
+                  <TextBlock Text="11 24H2" Style="{StaticResource Secondaire}" Margin="8,0,0,0"
+                             VerticalAlignment="Center"/>
+                </StackPanel>
+              </UniformGrid>
+              <Border Background="#F7F7F7" CornerRadius="5" Padding="10,6" Margin="0,12,0,0">
+                <TextBlock Text="Administrateur · poste LORITZ-PC042 · Windows 11 24H2"
+                           Style="{StaticResource Secondaire}"/>
+              </Border>
+            </StackPanel>
+          </Border>
+
           <!-- Journal -->
-          <Border Style="{StaticResource Carte}" Margin="0,14,0,0" Height="340">
+          <Border Grid.Row="4" Style="{StaticResource Carte}">
             <Grid>
               <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
@@ -345,134 +512,218 @@
               </Border>
             </Grid>
           </Border>
-        </StackPanel>
+        </Grid>
 
-        <StackPanel Grid.Column="2">
-          <!-- Pre-vol -->
-          <Border Style="{StaticResource Carte}">
-            <StackPanel>
-              <Grid>
-                <TextBlock Text="Vérifications pré-vol" Style="{StaticResource TitreCarte}"/>
-                <Button x:Name="BtnRafraichir" Style="{StaticResource Bouton}" Content="Rafraîchir"
-                        Padding="10,2" FontSize="12" HorizontalAlignment="Right"/>
-              </Grid>
-              <StackPanel Margin="0,14,0,0">
-                <Grid Margin="0,0,0,10">
+        <!-- Colonne options -->
+        <Grid Grid.Column="2">
+          <ScrollViewer VerticalScrollBarVisibility="Auto"
+                        HorizontalScrollBarVisibility="Disabled">
+            <Border Style="{StaticResource Carte}" VerticalAlignment="Top">
+              <StackPanel>
+                <TextBlock Text="Options" Style="{StaticResource TitreCarte}"/>
+
+                <!-- Installation -->
+                <TextBlock Text="Installation" FontSize="12" FontWeight="SemiBold"
+                           Foreground="{StaticResource AccentFonce}" Margin="0,14,0,0"/>
+                <Grid Margin="0,7,0,0">
                   <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="150"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                   </Grid.ColumnDefinitions>
-                  <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                             Foreground="{StaticResource Succes}" VerticalAlignment="Center"/>
-                  <TextBlock Grid.Column="1" Text="setup.exe" Margin="10,0,0,0"/>
-                  <TextBlock Grid.Column="2" Text="Présent" Style="{StaticResource Secondaire}"/>
+                  <TextBlock Text="Programme setup.exe" Style="{StaticResource Etiquette}"/>
+                  <TextBox x:Name="ChampSetup" Grid.Column="1" Style="{StaticResource Champ}"
+                           Text="C:\InstallOffice2024\setup.exe"/>
+                  <Button x:Name="BtnSetup" Grid.Column="2" Style="{StaticResource Bouton}"
+                          Content="Parcourir…" Padding="10,4" FontSize="12" Margin="8,0,0,0"/>
                 </Grid>
-                <Grid Margin="0,0,0,10">
+                <Grid Margin="0,7,0,0">
                   <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="150"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                   </Grid.ColumnDefinitions>
-                  <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                             Foreground="{StaticResource Succes}" VerticalAlignment="Center"/>
-                  <TextBlock Grid.Column="1" Text="Espace disque" Margin="10,0,0,0"/>
-                  <TextBlock Grid.Column="2" Text="212 Go" Style="{StaticResource Secondaire}"/>
+                  <TextBlock Text="Langue d'installation" Style="{StaticResource Etiquette}"/>
+                  <Border x:Name="LangueChoix" Grid.Column="1" Style="{StaticResource Selecteur}"
+                          HorizontalAlignment="Left" Width="130">
+                    <Grid>
+                      <TextBlock x:Name="LangueTexte" Text="fr-fr" FontSize="12"
+                                 Foreground="{StaticResource Texte}"/>
+                      <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="9"
+                                 Foreground="{StaticResource Texte2}" HorizontalAlignment="Right"
+                                 VerticalAlignment="Center"/>
+                    </Grid>
+                  </Border>
                 </Grid>
-                <Grid Margin="0,0,0,10">
+                <CheckBox x:Name="ChkRemoveOld" Style="{StaticResource Case}" Margin="0,12,0,0"
+                          Content="Désinstaller l'ancienne version d'Office avant installation"/>
+                <CheckBox x:Name="ChkInstall" Style="{StaticResource Case}" Margin="0,8,0,0"
+                          Content="Lancer l'installation automatiquement après le téléchargement"
+                          IsChecked="True"/>
+
+                <TextBlock Text="Sources" FontSize="12" FontWeight="SemiBold"
+                           Foreground="{StaticResource AccentFonce}" Margin="0,12,0,0"/>
+                <CheckBox x:Name="ChkDepot" Style="{StaticResource Case}" Margin="0,8,0,0"
+                          Content="Dépôt de sources (sans téléchargement)"/>
+                <Grid Margin="0,7,0,0">
                   <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="150"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                   </Grid.ColumnDefinitions>
-                  <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                             Foreground="{StaticResource Succes}" VerticalAlignment="Center"/>
-                  <TextBlock Grid.Column="1" Text="Réseau" Margin="10,0,0,0"/>
-                  <TextBlock Grid.Column="2" Text="KMS joignable" Style="{StaticResource Secondaire}"/>
+                  <TextBlock Text="Dossier du dépôt" Style="{StaticResource Etiquette}"/>
+                  <TextBox x:Name="ChampDepot" Grid.Column="1" Style="{StaticResource Champ}"
+                           Text="\\serveur\office" IsEnabled="False"/>
+                  <Button x:Name="BtnDepot" Grid.Column="2" Style="{StaticResource Bouton}"
+                          Content="Parcourir…" Padding="10,4" FontSize="12" Margin="8,0,0,0"
+                          IsEnabled="False"/>
                 </Grid>
-                <Grid>
+
+                <TextBlock Text="Configuration XML" FontSize="12" FontWeight="SemiBold"
+                           Foreground="{StaticResource AccentFonce}" Margin="0,12,0,0"/>
+                <Grid Margin="0,7,0,0">
+                  <RadioButton x:Name="RadXmlAuto" Style="{StaticResource Option}"
+                               Content="Générer automatiquement" IsChecked="True"
+                               VerticalAlignment="Center"/>
+                  <Button x:Name="BtnApps" Style="{StaticResource Bouton}"
+                          Content="Personnaliser les apps…" Padding="10,4" FontSize="12"
+                          HorizontalAlignment="Right"/>
+                </Grid>
+                <TextBlock x:Name="LblApps" Text="Exclues : Teams, OneDrive, Skype Entreprise"
+                           Style="{StaticResource Secondaire}" Margin="24,4,0,0"/>
+                <Grid Margin="0,7,0,0">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                   </Grid.ColumnDefinitions>
-                  <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                             Foreground="{StaticResource Succes}" VerticalAlignment="Center"/>
-                  <TextBlock Grid.Column="1" Text="Windows" Margin="10,0,0,0"/>
-                  <TextBlock Grid.Column="2" Text="11 24H2" Style="{StaticResource Secondaire}"/>
+                  <RadioButton x:Name="RadXmlFichier" Style="{StaticResource Option}"
+                               Content="Utiliser un fichier" VerticalAlignment="Center"/>
+                  <TextBox x:Name="ChampXml" Grid.Column="1" Style="{StaticResource Champ}"
+                           Margin="8,0,0,0" IsEnabled="False"/>
+                  <Button x:Name="BtnXml" Grid.Column="2" Style="{StaticResource Bouton}"
+                          Content="Parcourir…" Padding="10,4" FontSize="12" Margin="8,0,0,0"
+                          IsEnabled="False"/>
+                </Grid>
+
+                <TextBlock Text="Activation KMS" FontSize="12" FontWeight="SemiBold"
+                           Foreground="{StaticResource AccentFonce}" Margin="0,12,0,0"/>
+                <Grid Margin="0,7,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <CheckBox x:Name="ChkKms" Style="{StaticResource Case}" Content="Activer via KMS"
+                            IsChecked="True" VerticalAlignment="Center"/>
+                  <TextBox x:Name="ChampKms" Grid.Column="1" Style="{StaticResource Champ}"
+                           Text="kms.ac-nancy.fr" Margin="10,0,0,0"/>
+                  <Button x:Name="BtnTestKms" Grid.Column="2" Style="{StaticResource Bouton}"
+                          Content="Tester la connexion" Padding="10,4" FontSize="12"
+                          Margin="8,0,0,0"/>
+                </Grid>
+                <Grid Margin="0,7,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="150"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="Serveur KMS de secours" Style="{StaticResource Etiquette}"/>
+                  <TextBox x:Name="ChampKmsSecours" Grid.Column="1" Style="{StaticResource Champ}"
+                           Text="kms2.ac-nancy.fr:1688"/>
+                </Grid>
+                <Grid Margin="0,7,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <CheckBox x:Name="ChkCle" Style="{StaticResource Case}"
+                            Content="Appliquer une clé produit" VerticalAlignment="Center"/>
+                  <TextBox x:Name="ChampCle" Grid.Column="1" Style="{StaticResource Champ}"
+                           Text="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" Margin="10,0,0,0"
+                           IsEnabled="False"/>
+                </Grid>
+
+                <TextBlock Text="Proxy" FontSize="12" FontWeight="SemiBold"
+                           Foreground="{StaticResource AccentFonce}" Margin="0,12,0,0"/>
+                <CheckBox x:Name="ChkProxy" Style="{StaticResource Case}" Margin="0,8,0,0"
+                          Content="Utiliser un proxy pour le téléchargement"/>
+                <Grid Margin="0,7,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="150"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <Grid Grid.ColumnSpan="3">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="150"/>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="Adresse" Style="{StaticResource Etiquette}"/>
+                    <TextBox x:Name="ChampProxy" Grid.Column="1" Style="{StaticResource Champ}"
+                             Text="proxy.ac-nancy.fr" IsEnabled="False"/>
+                    <TextBlock Grid.Column="2" Text="Port" Style="{StaticResource Etiquette}"
+                               Margin="10,0,8,0"/>
+                    <TextBox x:Name="ChampPort" Grid.Column="3" Style="{StaticResource Champ}"
+                             Text="8080" Width="64" IsEnabled="False"/>
+                  </Grid>
+                </Grid>
+                <Grid Margin="0,7,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="150"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="Identifiants" Style="{StaticResource Etiquette}"/>
+                  <TextBox x:Name="ChampProxyUser" Grid.Column="1" Style="{StaticResource Champ}"
+                           Text="eleve" IsEnabled="False"/>
+                  <PasswordBox x:Name="ChampProxyPass" Grid.Column="2" Margin="8,0,0,0" Width="130"
+                               Style="{StaticResource ChampSecret}" IsEnabled="False"/>
+                  <Button x:Name="BtnTestProxy" Grid.Column="3" Style="{StaticResource Bouton}"
+                          Content="Tester le proxy" Padding="10,4" FontSize="12" Margin="8,0,0,0"
+                          IsEnabled="False"/>
+                </Grid>
+                <Grid Margin="0,7,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="150"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="Exceptions" Style="{StaticResource Etiquette}"/>
+                  <TextBox x:Name="ChampBypass" Grid.Column="1" Style="{StaticResource Champ}"
+                           Text="&lt;local&gt;;*.local" IsEnabled="False"/>
                 </Grid>
               </StackPanel>
-              <Border Background="#F7F7F7" CornerRadius="5" Padding="10,7" Margin="0,14,0,0">
-                <TextBlock Text="Administrateur · poste LORITZ-PC042"
-                           Style="{StaticResource Secondaire}"/>
-              </Border>
-            </StackPanel>
-          </Border>
-
-          <!-- Configuration -->
-          <Border Style="{StaticResource Carte}" Margin="0,14,0,0">
-            <StackPanel>
-              <TextBlock Text="Configuration" Style="{StaticResource TitreCarte}"/>
-              <Grid Margin="0,12,0,0">
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="Auto"/>
-                  <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                  <RowDefinition Height="Auto"/>
-                  <RowDefinition Height="Auto"/>
-                  <RowDefinition Height="Auto"/>
-                  <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                <TextBlock Text="Mode" Style="{StaticResource Secondaire}"/>
-                <TextBlock Grid.Column="1" Text="Dépôt de sources" HorizontalAlignment="Right"/>
-                <TextBlock Grid.Row="1" Text="Sources" Style="{StaticResource Secondaire}"
-                           Margin="0,8,0,0"/>
-                <TextBlock Grid.Row="1" Grid.Column="1" Text="\\serveur\office" FontSize="12"
-                           HorizontalAlignment="Right" Margin="0,8,0,0"/>
-                <TextBlock Grid.Row="2" Text="Serveur KMS" Style="{StaticResource Secondaire}"
-                           Margin="0,8,0,0"/>
-                <TextBlock Grid.Row="2" Grid.Column="1" Text="kms.ac-nancy:1688" FontSize="12"
-                           HorizontalAlignment="Right" Margin="0,8,0,0"/>
-                <TextBlock Grid.Row="3" Text="Proxy" Style="{StaticResource Secondaire}"
-                           Margin="0,8,0,0"/>
-                <TextBlock Grid.Row="3" Grid.Column="1" Text="Relais 127.0.0.1:52144"
-                           FontSize="12" HorizontalAlignment="Right" Margin="0,8,0,0"/>
-              </Grid>
-            </StackPanel>
-          </Border>
-
-          <!-- Actions -->
-          <Border Style="{StaticResource Carte}" Margin="0,14,0,0">
-            <StackPanel>
-              <TextBlock Text="Actions" Style="{StaticResource TitreCarte}"/>
-              <Button x:Name="BtnInstaller" Style="{StaticResource BoutonPrimaire}"
-                      Content="Installer Office 2024" Margin="0,12,0,0"/>
-              <Button x:Name="BtnTester" Style="{StaticResource Bouton}"
-                      Content="Tester le proxy" Margin="0,8,0,0"/>
-              <Button x:Name="BtnReliquat" Style="{StaticResource Bouton}"
-                      Content="Simuler un reliquat de proxy" Margin="0,8,0,0"/>
-              <TextBlock Text="Aucune donnée n'est écrite sur le poste par cet aperçu."
-                         Style="{StaticResource Secondaire}" TextWrapping="Wrap"
-                         Margin="0,12,0,0"/>
-            </StackPanel>
-          </Border>
-        </StackPanel>
+            </Border>
+          </ScrollViewer>
+        </Grid>
       </Grid>
 
       <!-- Pied -->
       <Border Grid.Row="2" Background="#FBFBFB" BorderBrush="#E9E9E9" BorderThickness="0,1,0,0"
               CornerRadius="0,0,10,10">
         <Grid Margin="18,0">
-          <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-            <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                       Foreground="{StaticResource Succes}" VerticalAlignment="Center"/>
-            <TextBlock x:Name="PiedStatut" Text="Prêt à démarrer" Margin="8,0,0,0"
-                       VerticalAlignment="Center"/>
+          <StackPanel VerticalAlignment="Center">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                         Foreground="{StaticResource Succes}" VerticalAlignment="Center"/>
+              <TextBlock x:Name="PiedStatut" Text="Prêt à démarrer" Margin="8,0,0,0"
+                         VerticalAlignment="Center"/>
+            </StackPanel>
+            <TextBlock Text="Aperçu : aucune donnée n'est écrite sur le poste." FontSize="11"
+                       Foreground="#8A8A8A" Margin="20,2,0,0"/>
           </StackPanel>
-          <TextBlock Text="Lycée Loritz, Grand Est  ·  Installation hors ligne"
-                     Style="{StaticResource Secondaire}" HorizontalAlignment="Right"
-                     VerticalAlignment="Center"/>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                      VerticalAlignment="Center">
+            <TextBlock Text="Lycée Loritz, Grand Est" Style="{StaticResource Secondaire}"
+                       VerticalAlignment="Center" Margin="0,0,16,0"/>
+            <Button x:Name="BtnReliquat" Style="{StaticResource Bouton}"
+                    Content="Simuler un reliquat de proxy" Padding="12,6" FontSize="12"/>
+            <Button x:Name="BtnInstaller" Style="{StaticResource BoutonPrimaire}"
+                    Content="Installer Office 2024" Padding="16,7" Margin="8,0,0,0"/>
+          </StackPanel>
         </Grid>
       </Border>
     </Grid>
