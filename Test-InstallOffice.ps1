@@ -286,6 +286,14 @@ try {
         # controle. Le badge est lu dans le XAML livre, pas dans une constante du test.
         $badge = if ($xaml -match '<TextBlock Text="([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)"\s+FontSize="11"') { $matches[1] } else { "(absent)" }
         Check "XAML : badge de version = version de l'EXE" ($badge -eq $vi.FileVersion) ("badge=" + $badge + " EXE=" + $vi.FileVersion + " - aligner le badge de Maquette\Principal.xaml sur -Version")
+        # Le README annonce la version du programme a deux endroits : la commande de
+        # compilation (-Version "...") et la prose ("version `...`, titre"). Toutes doivent
+        # valoir celle du binaire livre. Les autres nombres a quatre parties du README ne
+        # sont pas des versions du programme : l'ODT (16.0.x) et l'adresse du relais.
+        $readmeCompil = if (Test-Path -LiteralPath (Join-Path $PSScriptRoot "README.md")) { [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "README.md")) } else { "" }
+        $versionsReadme = @([regex]::Matches($readmeCompil, '(?i)version\s*["`]?([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+        $ecartsVersion = @($versionsReadme | Where-Object { $_ -ne $vi.FileVersion })
+        Check "README : versions annoncees = version de l'EXE" (($versionsReadme.Count -gt 0) -and ($ecartsVersion.Count -eq 0)) ("README annonce=" + ($versionsReadme -join ", ") + " EXE=" + $vi.FileVersion + " - aligner le README (commande Invoke-PS2EXE et prose)")
         Check "EXE : titre" ($vi.FileDescription -eq "Deploiement Office 2024") ("FileDescription=" + $vi.FileDescription + " (attendu : Deploiement Office 2024 / -Title)" + $cons)
         Check "EXE : produit et societe" (($vi.ProductName -eq "InstallOffice") -and ($vi.CompanyName -eq "Lycee Loritz")) ("ProductName=" + $vi.ProductName + " CompanyName=" + $vi.CompanyName + " (attendu : InstallOffice / -Product, Lycee Loritz / -Company)" + $cons)
         Check "EXE : OriginalFilename" ($vi.OriginalFilename -eq "Install-Office2024-KMS.exe") ("OriginalFilename=" + $vi.OriginalFilename + " (attendu : Install-Office2024-KMS.exe, donc compiler directement vers ce nom)" + $cons)
