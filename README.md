@@ -28,7 +28,7 @@ Le dossier extrait contient tout : le programme, ses fenêtres (`Maquette\`), le
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `Install-Office2024-KMS.ps1` | Moteur : déroulé de déploiement extrait par l'EXE ; son interface WinForms historique reste exécutable telle quelle |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (111 cas, `-Fast` pour la section 1 seule) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (113 cas, `-Fast` pour la section 1 seule) |
 | `.githooks/pre-commit` | Contrôle rapide de l'index avant chaque commit, refuse l'EXE désynchronisé |
 | `.github/workflows/controle-exe.yml` | Suite complète + contrat de fins de ligne (checkout sans conversion) sur GitHub Actions, à chaque push sur `main` et à chaque pull request |
 | `setup.exe` | Office Deployment Tool (16.0.18129.20030, signé Microsoft) — versionné pour que le ZIP soit utilisable tel quel |
@@ -148,12 +148,21 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps
 `-Fast` ne joue que la section 1 — syntaxe de l'interface et du moteur, empreinte du script
 embarqué, propriétés de l'EXE et présence des fichiers livrés avec lui — soit quelques
 secondes : c'est exactement ce que lance le hook avant chaque commit. Sans commutateur, la
-suite complète (111 cas) tourne, comme sur GitHub.
+suite complète (113 cas) tourne, comme sur GitHub.
 
 Le **dernier contrôle** de la suite relit ce README, y cherche toutes les mentions
 « N cas » et exige qu'elles valent le total réellement exécuté : un cas ajouté ou retiré
 sans mettre la documentation à jour fait donc échouer le contrôle, localement comme sur
 GitHub. C'est ce qui empêche le chiffre annoncé de dériver à nouveau (60, 67, 69…).
+
+Les quatre captures de `Maquette\` sont régénérées par la suite (hors mode `-Fast`) et
+comparées au pixel aux PNG livrés : une retouche du XAML qui laisse les images en arrière
+est signalée au lieu de passer inaperçue.
+
+Avant livraison, la suite exporte le dépôt (`git archive HEAD`, l'archive que sert le
+bouton **Code → Download ZIP**), vérifie qu'elle contient `Maquette\`, le moteur et
+`setup.exe`, puis y rejoue la section 1 : un ZIP incomplet est signalé avant d'être
+distribué.
 
 Les fins de ligne font partie du contrat : l'EXE embarque le script en CRLF et le contrôle
 compare des octets, donc `.gitattributes` impose `*.ps1 text eol=crlf` (et `*.exe binary`).
@@ -251,7 +260,7 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   ralenti ; `git commit --no-verify` reste possible pour un cas exceptionnel, et se voit
   dans l'historique.
 - **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la suite
-  **complète** (111 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
+  **complète** (113 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
   request : un EXE oublié ou compilé autrement fait échouer la vérification côté serveur,
   même si le hook local n'était pas installé — et sans rien imposer à la boucle locale.
 - **le contrat de fins de ligne y est vérifié aussi** : un second job refait un checkout

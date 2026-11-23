@@ -36,6 +36,9 @@ Add-Type -AssemblyName System.Drawing | Out-Null
 $MainScript   = Join-Path $PSScriptRoot "Apercu-Maquette.ps1"
 $EngineScript = Join-Path $PSScriptRoot "Install-Office2024-KMS.ps1"
 $ExePath      = Join-Path $PSScriptRoot "Install-Office2024-KMS.exe"
+# PowerShell 5.1 du systeme : c'est lui qui rend les captures et rejoue la section 1 dans
+# l'archive du depot, comme le ferait un poste livre.
+$psHost       = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 $Work       = Join-Path $env:TEMP ("ctl_office_" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 $Fail       = 0
 $Pass       = 0
@@ -311,9 +314,19 @@ try {
         # comme versions. Tout nombre a quatre parties du README doit donc etre l'une de ces
         # deux versions ou une adresse de bouclage (le relais local 127.0.0.0/8) ; un nombre
         # ni l'un ni l'autre est une valeur que rien ne confronte a un fichier livre.
-        $nombresReadme = @([regex]::Matches($readmeCompil, '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+') | ForEach-Object { $_.Value } | Sort-Object -Unique)
-        $horsControle = @($nombresReadme | Where-Object { ($_ -ne $vi.FileVersion) -and ($_ -ne $versionOdt) -and ($_ -notmatch '^127\.') })
-        Check "README : nombres a quatre parties = versions annoncees ou bouclage" ($horsControle.Count -eq 0) ("hors controle=" + ($horsControle -join ", ") + " (attendu : " + $vi.FileVersion + ", " + $versionOdt + " ou 127.0.0.0/8) - remplacer par une version annoncee ou retirer du README")
+        # Chaque nombre hors controle est annonce avec sa ligne : une derive se corrige
+        # sans rechercher la valeur dans le README. Un nombre present sur plusieurs lignes
+        # est signale a chacune d'elles.
+        $horsControle = @()
+        $lignesReadme = $readmeCompil -split "`r?`n"
+        for ($n = 0; $n -lt $lignesReadme.Count; $n++) {
+            foreach ($m in [regex]::Matches($lignesReadme[$n], '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')) {
+                if (($m.Value -ne $vi.FileVersion) -and ($m.Value -ne $versionOdt) -and ($m.Value -notmatch '^127\.')) {
+                    $horsControle += ("ligne " + ($n + 1) + " : " + $m.Value)
+                }
+            }
+        }
+        Check "README : nombres a quatre parties = versions annoncees ou bouclage" ($horsControle.Count -eq 0) ("hors controle=" + ($horsControle -join ", ") + " (attendu : " + $vi.FileVersion + ", " + $versionOdt + " ou 127.0.0.0/8) - corriger la ligne ou retirer le nombre du README")
         Check "EXE : titre" ($vi.FileDescription -eq "Deploiement Office 2024") ("FileDescription=" + $vi.FileDescription + " (attendu : Deploiement Office 2024 / -Title)" + $cons)
         Check "EXE : produit et societe" (($vi.ProductName -eq "InstallOffice") -and ($vi.CompanyName -eq "Lycee Loritz")) ("ProductName=" + $vi.ProductName + " CompanyName=" + $vi.CompanyName + " (attendu : InstallOffice / -Product, Lycee Loritz / -Company)" + $cons)
         Check "EXE : OriginalFilename" ($vi.OriginalFilename -eq "Install-Office2024-KMS.exe") ("OriginalFilename=" + $vi.OriginalFilename + " (attendu : Install-Office2024-KMS.exe, donc compiler directement vers ce nom)" + $cons)
@@ -341,6 +354,47 @@ try {
         Write-Host ("RESULTAT (rapide) : " + $Fail + " echec(s) sur " + $totalRapide + " controles.") -ForegroundColor Red
         exit 1
     }
+
+    # Les quatre captures livrees montrent le XAML livre : les regenerer ici et exiger un
+    # PNG identique a l'octet. Sans ce controle, modifier Maquette\*.xaml laisse des
+    # references qui montrent une interface qui n'existe plus. Le rendu passe par le
+    # PowerShell 5.1 du systeme, en STA, comme les references ; la comparaison portant sur
+    # le fichier, elle depend aussi de la pile de rendu (polices) : sur un poste qui n'est
+    # pas celui des references, les images different pour cette raison-la, et le message ne
+    # peut pas distinguer les deux causes.
+    Section "1 bis. Captures de reference : identiques au pixel"
+    $captures = @(
+        @{ Nom = "apercu-principal.png"    ; Options = @() }
+        @{ Nom = "apercu-dialogue.png"     ; Options = @("-Dialogue") }
+        @{ Nom = "apercu-applications.png" ; Options = @("-Applications") }
+        @{ Nom = "apercu-etats.png"        ; Options = @("-Etats") }
+    )
+    $ecartsCapture = @()
+    foreach ($c in $captures) {
+        $livre = Join-Path $PSScriptRoot ("Maquette\" + $c.Nom)
+        if (-not (Test-Path -LiteralPath $livre)) { $ecartsCapture += ($c.Nom + " : PNG livre absent") ; continue }
+        $rendu = Join-Path $Work ("rendu_" + $c.Nom)
+        $arguments = @("-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", $MainScript, "-Capture", $rendu) + $c.Options
+        # Comme pour le hook : le script de capture ecrit ses erreurs sur stderr, que
+        # $ErrorActionPreference = Stop transformerait en erreur fatale du harnais (les
+        # controles suivants ne seraient plus joues).
+        $eapCapture = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $sortie = (& $psHost @arguments 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+        $code = $LASTEXITCODE
+        $ErrorActionPreference = $eapCapture
+        if (-not (Test-Path -LiteralPath $rendu)) {
+            # Rien n'a ete ecrit : le rendu a echoue (XAML ou script), ce n'est pas une
+            # reference perimee et cela ne doit pas etre annonce comme tel.
+            $derniere = @($sortie -split "`r?`n" | Where-Object { $_.Trim() -ne "" })[-1]
+            $ecartsCapture += ($c.Nom + " : rendu impossible (code " + $code + " : " + $derniere + ")")
+        } elseif ((Get-FileHash -LiteralPath $rendu -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $livre -Algorithm SHA256).Hash) {
+            $ecartsCapture += ($c.Nom + " : different du rendu du XAML actuel")
+        }
+    }
+    $detailCaptures = if ($ecartsCapture.Count -eq 0) { "4 rendus identiques aux PNG livres" }
+                      else { ($ecartsCapture -join " ; ") + " - regenerer les quatre captures (memes commandes : -Capture, -Dialogue, -Applications, -Etats) et committer les PNG" }
+    Check "captures : les 4 PNG livres sont le rendu du XAML actuel" ($ecartsCapture.Count -eq 0) $detailCaptures
 
     # fixtures communes
     $fakeExe  = Join-Path $Work "fake_setup.exe"
@@ -1221,6 +1275,56 @@ public class FakeAuthProxy
             if (Test-Path -LiteralPath $depot) { Remove-Item -LiteralPath $depot -Recurse -Force -ErrorAction SilentlyContinue }
         }
     }
+
+    # Pre-livraison : le ZIP telecharge depuis GitHub est l'archive du depot (git archive
+    # HEAD). On l'exporte ici, on verifie qu'elle contient ce sans quoi l'EXE ne peut pas
+    # fonctionner, puis on y rejoue la section 1 : le dossier extrait est un poste comme un
+    # autre, il ne voit ni .git ni l'arbre de travail.
+    Section "11. Pre-livraison : archive du depot"
+    $archiveZip = Join-Path $Work "depot.zip"
+    $archiveDir = Join-Path $Work "depot"
+    $problemesArchive = @()
+    $eapArchive = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $sortieArchive = (& git archive --format=zip -o $archiveZip HEAD 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+    $codeArchive = $LASTEXITCODE
+    $ErrorActionPreference = $eapArchive
+    if (($codeArchive -ne 0) -or -not (Test-Path -LiteralPath $archiveZip)) {
+        $problemesArchive += ("git archive HEAD a echoue (code " + $codeArchive + " : " + $sortieArchive + ")")
+    } else {
+        try { Expand-Archive -LiteralPath $archiveZip -DestinationPath $archiveDir -Force }
+        catch { $problemesArchive += ("archive illisible : " + $_.Exception.Message) }
+        $manquants = @()
+        foreach ($attendu in @("Maquette\Principal.xaml", "Install-Office2024-KMS.ps1", "setup.exe")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $archiveDir $attendu))) { $manquants += $attendu }
+        }
+        if ($manquants.Count -gt 0) { $problemesArchive += ("archive incomplete : manquants=" + ($manquants -join ", ")) }
+        $suiteArchive = Join-Path $archiveDir "Test-InstallOffice.ps1"
+        if (Test-Path -LiteralPath $suiteArchive) {
+            $eapArchive = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            $sortieInterne = (& $psHost -NoProfile -STA -ExecutionPolicy Bypass -File $suiteArchive -Fast 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+            $codeInterne = $LASTEXITCODE
+            $ErrorActionPreference = $eapArchive
+            # Code 0 ne suffit pas : la ligne RESULTAT prouve que la section 1 a bien ete
+            # jouee, et N/N qu'aucun de ses controles n'a echoue.
+            $resultatInterne = @($sortieInterne -split "`r?`n" | Where-Object { $_ -match 'RESULTAT \(rapide\)' })[-1]
+            $okInterne = ($codeInterne -eq 0) -and ($resultatInterne -match 'RESULTAT \(rapide\) : (\d+)/(\d+) controles passes') -and ($matches[1] -eq $matches[2]) -and ([int]$matches[1] -gt 0)
+            if (-not $okInterne) {
+                # Les controles en echec, la ligne RESULTAT, ou a defaut la premiere ligne
+                # ecrite : un processus qui meurt avant de jouer la section 1 doit laisser
+                # une trace lisible, et jamais des parentheses vides.
+                $detailsInterne = @($sortieInterne -split "`r?`n" | Where-Object { $_ -match 'ECHEC|ERREUR DU HARNAIS' })
+                if ($resultatInterne) { $detailsInterne += $resultatInterne }
+                if ($detailsInterne.Count -eq 0) { $detailsInterne = @(@($sortieInterne -split "`r?`n" | Where-Object { $_.Trim() -ne "" }) | Select-Object -First 1) }
+                $suffixeInterne = if ($detailsInterne.Count -gt 0) { " (" + ($detailsInterne -join " | ") + ")" } else { "" }
+                $problemesArchive += ("section 1 dans l'archive : code " + $codeInterne + $suffixeInterne)
+            }
+        } else {
+            $problemesArchive += "section 1 non rejouee : Test-InstallOffice.ps1 absent de l'archive"
+        }
+    }
+    Check "pre-livraison : l'archive du depot est complete et passe la section 1" ($problemesArchive.Count -eq 0) ($problemesArchive -join " ; ")
 }
 catch {
     Write-Host ("ERREUR DU HARNAIS : " + $_.Exception.Message) -ForegroundColor Red
