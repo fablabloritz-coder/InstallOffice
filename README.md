@@ -272,6 +272,24 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   publie les octets réellement reçus, donc un faux « RECOMPILER » ne peut plus passer
   inaperçu sur un poste donné pour la seule raison qu'il a le bon réglage local.
 
+## Travailler depuis un autre poste
+
+Le dépôt contient tout ce qu'il faut pour reprendre le travail sur un autre PC : sources,
+fenêtres XAML, captures et leurs empreintes, EXE, moteur, `setup.exe` et la suite de
+contrôles. Après un clone (ou l'extraction du ZIP), deux réglages sont propres à la machine
+et ne voyagent pas avec le dépôt :
+
+```powershell
+git config core.hooksPath .githooks        # hook de pré-commit, sinon jamais lancé
+Install-Module ps2exe -Scope CurrentUser   # seulement pour recompiler l'EXE
+powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps1 -Fast
+```
+
+`config.json` (réglages du poste) et `Office/` (sources Office téléchargées) restent hors du
+dépôt : leur absence est normale. Sur un poste dont les polices diffèrent de celles qui ont
+produit les captures, la suite signale les PNG différents sans échouer ; l'empreinte des
+sources, elle, reste décisive.
+
 ## Limites connues
 
 - Windows uniquement, architecture 64 bits
