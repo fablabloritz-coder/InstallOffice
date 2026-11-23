@@ -20,6 +20,12 @@
       <sys:String x:Key="EtatTermine">Terminé</sys:String>
       <sys:String x:Key="EtatSaute">Ignoré</sys:String>
       <sys:String x:Key="EtatErreur">Échec</sys:String>
+      <!-- Libelles du pre-vol : poses par le XAML (UTF-8), le script reste ASCII. -->
+      <sys:String x:Key="PreVolPresent">Présent</sys:String>
+      <sys:String x:Key="PreVolAbsent">Absent</sys:String>
+      <sys:String x:Key="PreVolNonTeste">Non testé</sys:String>
+      <sys:String x:Key="PreVolInjoignable">injoignable</sys:String>
+      <sys:String x:Key="PreVolSimule">valeurs simulées (mode capture)</sys:String>
     </ResourceDictionary>
   </Window.Resources>
 
@@ -173,12 +179,33 @@
                 </ProgressBar.Template>
               </ProgressBar>
 
+              <!-- Activite de fond : son segment glisse et clignote pendant une
+                   etape, sous la jauge qu'il double. En capture aucune animation
+                   n'est demarree, donc la reference reste reproductible au pixel. -->
+              <Grid x:Name="BandeActivite" Height="4" Margin="0,6,0,0" Visibility="Collapsed"
+                    ClipToBounds="True" Background="{StaticResource Piste}">
+                <Border x:Name="SegmentActivite" Width="190" HorizontalAlignment="Left"
+                        Background="{StaticResource Accent}" CornerRadius="2">
+                  <Border.RenderTransform>
+                    <TranslateTransform x:Name="GlissementActivite" X="0"/>
+                  </Border.RenderTransform>
+                </Border>
+              </Grid>
+
               <Grid Margin="0,10,0,0">
                 <TextBlock x:Name="StatutTexte" Text="Prêt." FontWeight="SemiBold"
                            Foreground="{StaticResource Texte}"/>
                 <TextBlock x:Name="StatutDetail" Text="Aucun déploiement en cours"
                            Style="{StaticResource Secondaire}" HorizontalAlignment="Right"/>
               </Grid>
+
+              <!-- Points de verification de l'etape en cours : remplis par le script
+                   (un glyphe par point, vert franchi, bleu en cours, gris a venir). -->
+              <StackPanel Orientation="Horizontal" Margin="0,9,0,0">
+                <TextBlock Text="Points de contrôle" Style="{StaticResource Secondaire}"
+                           VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <StackPanel x:Name="PointsEtape" Orientation="Horizontal" VerticalAlignment="Center"/>
+              </StackPanel>
             </StackPanel>
           </Border>
 
@@ -190,39 +217,45 @@
                 <Button x:Name="BtnRafraichir" Style="{StaticResource BoutonSecondaire}" Content="Rafraîchir"
                         Padding="10,2" FontSize="12" HorizontalAlignment="Right"/>
               </Grid>
+              <!-- Chaque ligne est nommee : le script y ecrit le resultat d'une mesure
+                   (Ico* porte le glyphe d'etat, Val* la valeur constatee). -->
               <UniformGrid Columns="2" Margin="0,12,0,0">
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                  <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                             Foreground="{StaticResource Succes}" VerticalAlignment="Center"/>
+                  <TextBlock x:Name="IcoSetup" Text="&#xE738;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                             Foreground="#8A8A8A" VerticalAlignment="Center"/>
                   <TextBlock Text="setup.exe" Margin="8,0,0,0" FontSize="12" VerticalAlignment="Center"/>
-                  <TextBlock Text="Présent" Style="{StaticResource Secondaire}" Margin="8,0,0,0"
-                             VerticalAlignment="Center"/>
+                  <TextBlock x:Name="ValSetup" Text="Non mesuré" Style="{StaticResource Secondaire}"
+                             Margin="8,0,0,0" VerticalAlignment="Center"
+                             TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                  <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                             Foreground="{StaticResource Succes}" VerticalAlignment="Center"/>
+                  <TextBlock x:Name="IcoDisque" Text="&#xE738;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                             Foreground="#8A8A8A" VerticalAlignment="Center"/>
                   <TextBlock Text="Espace disque" Margin="8,0,0,0" FontSize="12" VerticalAlignment="Center"/>
-                  <TextBlock Text="212 Go" Style="{StaticResource Secondaire}" Margin="8,0,0,0"
-                             VerticalAlignment="Center"/>
+                  <TextBlock x:Name="ValDisque" Text="Non mesuré" Style="{StaticResource Secondaire}"
+                             Margin="8,0,0,0" VerticalAlignment="Center"
+                             TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal">
-                  <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                             Foreground="{StaticResource Succes}" VerticalAlignment="Center"/>
-                  <TextBlock Text="Réseau" Margin="8,0,0,0" FontSize="12" VerticalAlignment="Center"/>
-                  <TextBlock Text="KMS joignable" Style="{StaticResource Secondaire}" Margin="8,0,0,0"
-                             VerticalAlignment="Center"/>
+                  <TextBlock x:Name="IcoKms" Text="&#xE738;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                             Foreground="#8A8A8A" VerticalAlignment="Center"/>
+                  <TextBlock Text="KMS" Margin="8,0,0,0" FontSize="12" VerticalAlignment="Center"/>
+                  <TextBlock x:Name="ValKms" Text="Non mesuré" Style="{StaticResource Secondaire}"
+                             Margin="8,0,0,0" VerticalAlignment="Center"
+                             TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal">
-                  <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                             Foreground="{StaticResource Succes}" VerticalAlignment="Center"/>
+                  <TextBlock x:Name="IcoWindows" Text="&#xE738;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                             Foreground="#8A8A8A" VerticalAlignment="Center"/>
                   <TextBlock Text="Windows" Margin="8,0,0,0" FontSize="12" VerticalAlignment="Center"/>
-                  <TextBlock Text="11 24H2" Style="{StaticResource Secondaire}" Margin="8,0,0,0"
-                             VerticalAlignment="Center"/>
+                  <TextBlock x:Name="ValWindows" Text="Non mesuré" Style="{StaticResource Secondaire}"
+                             Margin="8,0,0,0" VerticalAlignment="Center"
+                             TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
               </UniformGrid>
               <Border Background="#F7F7F7" CornerRadius="5" Padding="10,6" Margin="0,12,0,0">
-                <TextBlock Text="Administrateur · poste LORITZ-PC042 · Windows 11 24H2"
-                           Style="{StaticResource Secondaire}"/>
+                <TextBlock x:Name="InfoPoste" Text="Mesures en attente du poste"
+                           Style="{StaticResource Secondaire}" TextTrimming="CharacterEllipsis"/>
               </Border>
             </StackPanel>
           </Border>

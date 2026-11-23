@@ -7,8 +7,12 @@
 #  depot de sources, XML et applications, KMS (principal, secours, cle produit),
 #  proxy (adresse, port, identifiants, exceptions).
 #
-#  Aucun acces reseau, aucune ecriture sur le poste, aucune activation :
-#  cet apercu ne touche ni au moteur ni aux controles.
+#  Aucune ecriture sur le poste, aucune activation : cet apercu ne touche ni au
+#  moteur ni aux controles. En interactif, le pre-vol mesure reellement le poste
+#  (setup.exe, espace de C:, version de Windows) et les boutons de test ouvrent une
+#  connexion TCP de mesure vers le KMS ou le proxy. Le mode capture emploie des
+#  valeurs de reference, annoncees comme simulees dans le journal, pour que les
+#  PNG restent reproductibles au pixel.
 #
 #  Usage :
 #    powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Apercu-Maquette.ps1
@@ -21,6 +25,7 @@
 #    ... -Capture ... -Dialogue | -Applications
 #    ... -Capture ... -Focus ChkProxy     (met ce controle en focus avant le rendu)
 #    ... -Capture ... -Horloge 16:30:22   (heure du journal ; figee d'office en capture)
+#    ... -Capture ... -Mesure            (mesure le poste au lieu des valeurs de reference)
 # ================================================================
 param(
     [string]$Capture = "",
@@ -30,6 +35,7 @@ param(
     [string]$Focus = "",
     [ValidatePattern("^(\d{2}:\d{2}:\d{2})?$")]
     [string]$Horloge = "",
+    [switch]$Mesure,
     [int]$Etape = 7
 )
 
@@ -98,6 +104,252 @@ $glyphes = @{
     termine = [string][char]0xE73E ; saute = [string][char]0xE738 ; erreur = "!"
 }
 
+# --- Pre-vol : mesures reelles ---------------------------------------------
+# Meme logique que le moteur (Install-Office2024-KMS.ps1, Get-PreChecks) : le setup
+# est cherche la ou le champ le dit, sinon a cote du script ; l'espace est celui de
+# C: ; la version de Windows vient du registre. Le KMS n'est annonce joignable
+# qu'apres une connexion TCP reussie.
+function Resolve-SetupPath {
+    param([string]$Saisi)
+    if (-not [string]::IsNullOrWhiteSpace($Saisi)) { return $Saisi.Trim() }
+    return (Join-Path $ici "setup.exe")
+}
+
+function Split-HotePort {
+    # "kms.domaine.fr" prend le port par defaut ; "hote:1700" le sien ; "[::1]:1700".
+    param([string]$Adresse, [int]$PortDefaut)
+    $a = $Adresse.Trim()
+    if ($a -eq "") { return $null }
+    if ($a -match '^\[([^\]]+)\](?::(\d+))?$') {
+        $port = if ($Matches[2]) { [int]$Matches[2] } else { $PortDefaut }
+        return @{ Hote = $Matches[1] ; Port = $port }
+    }
+    if ($a -match '^(.+):(\d+)$') { return @{ Hote = $Matches[1] ; Port = [int]$Matches[2] } }
+    return @{ Hote = $a ; Port = $PortDefaut }
+}
+
+function Test-PortTcp {
+    # Connexion TCP reelle, duree mesuree. Un echec porte son motif : le texte
+    # affiche ne peut donc jamais etre plus sur que la mesure elle-meme.
+    param([string]$Hote, [int]$Port, [int]$Delai = 1500)
+    $resultat = @{ Ok = $false ; Ms = 0 ; Motif = "" }
+    if ([string]::IsNullOrWhiteSpace($Hote) -or $Port -le 0 -or $Port -gt 65535) {
+        $resultat.Motif = "adresse ou port invalide"
+        return $resultat
+    }
+    $client = New-Object System.Net.Sockets.TcpClient
+    $chrono = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $essai = $client.ConnectAsync($Hote, $Port)
+        if (-not $essai.Wait($Delai)) { $resultat.Motif = ("delai depasse (" + $Delai + " ms)") }
+        elseif ($client.Connected) { $resultat.Ok = $true }
+        else { $resultat.Motif = "connexion refusee" }
+    } catch {
+        $resultat.Motif = $_.Exception.GetBaseException().Message
+    } finally {
+        $chrono.Stop()
+        $resultat.Ms = [int]$chrono.ElapsedMilliseconds
+        try { $client.Close() } catch { }
+    }
+    $resultat
+}
+
+function Get-VersionWindows {
+    # Libelle court : "Windows 11 24H2 (26100)". Le moteur lit deja
+    # CurrentMajorVersionNumber pour son seuil ; la build et la version d'affichage
+    # etaient lues sans etre montrees, d'ou l'impression d'une version fausse.
+    $majeure = 0 ; $build = "" ; $affichage = ""
+    try {
+        $cle = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -ErrorAction Stop
+        $majeure = [int]$cle.CurrentMajorVersionNumber
+        $build = [string]$cle.CurrentBuildNumber
+        $affichage = [string]$cle.DisplayVersion
+    } catch { }
+    $morceaux = @()
+    if ($affichage -ne "") { $morceaux += $affichage }
+    if ($build -ne "") { $morceaux += ("(" + $build + ")") }
+    # Deux formes : Libelle pour le journal et le pied de carte, Court pour la ligne
+    # de la carte, dont l'etiquette porte deja le mot Windows.
+    $court = if ($majeure -ge 10) { (([string]$majeure + " " + ($morceaux -join " ")).Trim()) } else { "inconnu" }
+    return @{ Ok = ($majeure -ge 10) ; Majeure = $majeure ; Court = $court ; Libelle = ("Windows " + $court) }
+}
+
+function Get-PreVol {
+    param([string]$SetupSaisi, [string]$KmsSaisi, [bool]$KmsActif, $KmsDeja = $null)
+    $setup  = Resolve-SetupPath $SetupSaisi
+    $disque = Get-PSDrive C -ErrorAction SilentlyContinue
+    $libre  = if ($disque) { [math]::Round($disque.Free / 1GB, 1) } else { 0 }
+    $kms = $null
+    if ($KmsActif) {
+        if ($null -ne $KmsDeja) { $kms = $KmsDeja }
+        else {
+            $cible = Split-HotePort $KmsSaisi 1688
+            if ($null -ne $cible) { $kms = @{ Cible = $cible ; Test = (Test-PortTcp $cible.Hote $cible.Port) } }
+        }
+    }
+    return @{
+        Setup        = $setup
+        SetupPresent = ((-not [string]::IsNullOrWhiteSpace($setup)) -and (Test-Path -LiteralPath $setup))
+        LibreGo      = $libre
+        # 4 Go : le seuil du moteur ($DISK_MIN_GB).
+        AssezDEspace = ($libre -ge 4)
+        Os           = (Get-VersionWindows)
+        Reseau       = [System.Net.NetworkInformation.NetworkInterface]::GetIsNetworkAvailable()
+        Kms          = $kms
+        Admin        = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")
+        Poste        = $env:COMPUTERNAME
+    }
+}
+
+# Etats d'une ligne de pre-vol, comme ceux des etapes.
+$etatsPreVol = @{
+    ok      = @{ Glyphe = [string][char]0xE73E ; Couleur = "#0F7B0F" }
+    encours = @{ Glyphe = [string][char]0xE895 ; Couleur = "#0F6CBD" }
+    attente = @{ Glyphe = [string][char]0xE738 ; Couleur = "#8A8A8A" }
+    alerte  = @{ Glyphe = [string][char]0xE7BA ; Couleur = "#9D5D00" }
+    erreur  = @{ Glyphe = [string][char]0xE711 ; Couleur = "#C42B1C" }
+}
+
+function Set-LignePreVol {
+    param($Fenetre, [string]$Ligne, [string]$Etat, [string]$Valeur)
+    $icone = $Fenetre.FindName("Ico$Ligne")
+    if ($null -eq $icone) { throw "Ligne pre-vol '$Ligne' introuvable dans la fenetre." }
+    $e = $etatsPreVol[$Etat]
+    $icone.Text = $e.Glyphe
+    $icone.Foreground = Get-Pinceau $e.Couleur
+    # Nom distinct de $Valeur : PowerShell ne distingue pas la casse, et $valeur
+    # ecraserait le parametre avant la ligne suivante.
+    $champ = $Fenetre.FindName("Val$Ligne")
+    if ($null -eq $champ) { throw "Valeur pre-vol '$Ligne' introuvable dans la fenetre." }
+    $champ.Text = $Valeur
+    # La valeur reste discrete quand tout va bien ; sinon elle prend la couleur de
+    # l'alerte, pour que le probleme se lise sans chercher la ligne.
+    $champ.Foreground = Get-Pinceau $(if ($Etat -eq "ok" -or $Etat -eq "attente") { "#5D5D5D" } else { $e.Couleur })
+}
+
+function Update-PreVol {
+    # Remplit la carte pre-vol : mesures reelles par defaut ; valeurs de reference
+    # avec -Simule, quand une capture doit rester reproductible au pixel.
+    param($Fenetre, [switch]$Simule, $KmsDeja = $null)
+    if ($Simule) {
+        # La parenthese autour de FindResource n'est pas decorative : sans elle, le
+        # transtypage s'applique a la methode et la valeur affichee est son nom.
+        Set-LignePreVol $Fenetre "Setup"   "ok" ([string]$Fenetre.FindResource("PreVolPresent"))
+        Set-LignePreVol $Fenetre "Disque"  "ok" "212 Go libres"
+        Set-LignePreVol $Fenetre "Kms"     "ok" "kms.ac-nancy.fr:1688, 42 ms"
+        Set-LignePreVol $Fenetre "Windows" "ok" "11 24H2 (26100)"
+        $Fenetre.FindName("InfoPoste").Text = "Administrateur, poste LORITZ-PC042, Windows 11 24H2"
+        Add-Journal $Fenetre "avr" ("Pre-vol : " + [string]$Fenetre.FindResource("PreVolSimule"))
+        return
+    }
+    $activerKms = [bool]$Fenetre.FindName("ChkKms").IsChecked
+    $c = Get-PreVol -SetupSaisi $Fenetre.FindName("ChampSetup").Text `
+                    -KmsSaisi $Fenetre.FindName("ChampKms").Text `
+                    -KmsActif $activerKms -KmsDeja $KmsDeja
+
+    if ($c.SetupPresent) { Set-LignePreVol $Fenetre "Setup" "ok" ([string]$Fenetre.FindResource("PreVolPresent")) }
+    else { Set-LignePreVol $Fenetre "Setup" "erreur" ([string]$Fenetre.FindResource("PreVolAbsent")) }
+
+    # Culture invariante : sinon un poste francais ecrirait "344,7" et la meme
+    # mesure changerait de forme d'un poste a l'autre.
+    $go = $c.LibreGo.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+    if ($c.AssezDEspace) { Set-LignePreVol $Fenetre "Disque" "ok" ($go + " Go libres") }
+    else { Set-LignePreVol $Fenetre "Disque" "erreur" ($go + " Go libres, 4 Go requis") }
+
+    if ($null -eq $c.Kms) { Set-LignePreVol $Fenetre "Kms" "attente" ([string]$Fenetre.FindResource("PreVolNonTeste")) }
+    elseif ($c.Kms.Test.Ok) { Set-LignePreVol $Fenetre "Kms" "ok" ($c.Kms.Cible.Hote + ":" + $c.Kms.Cible.Port + ", " + $c.Kms.Test.Ms + " ms") }
+    else { Set-LignePreVol $Fenetre "Kms" "erreur" ($c.Kms.Cible.Hote + ":" + $c.Kms.Cible.Port + ", " + [string]$Fenetre.FindResource("PreVolInjoignable")) }
+
+    if ($c.Os.Ok) { Set-LignePreVol $Fenetre "Windows" "ok" $c.Os.Court }
+    else { Set-LignePreVol $Fenetre "Windows" "erreur" ($c.Os.Court + ", Windows 10+ requis") }
+
+    $pied = @($(if ($c.Admin) { "Administrateur" } else { "Sans droits administrateur" }), ("poste " + $c.Poste), $c.Os.Libelle)
+    if (-not $c.Reseau) { $pied += "aucune liaison reseau" }
+    $Fenetre.FindName("InfoPoste").Text = ($pied -join ", ")
+
+    Add-Journal $Fenetre "info" ("Pre-vol mesure : " + $c.Os.Libelle + ", " + $go + " Go libres sur C:.")
+    Add-Journal $Fenetre $(if ($c.SetupPresent) { "ok" } else { "err" }) ("setup.exe " + $(if ($c.SetupPresent) { "present" } else { "absent" }) + " : " + $c.Setup)
+    if ($null -eq $c.Kms) {
+        Add-Journal $Fenetre "avr" "KMS non teste : adresse vide ou activation decochee."
+    } elseif ($c.Kms.Test.Ok) {
+        Add-Journal $Fenetre "ok" ("Test TCP du KMS " + $c.Kms.Cible.Hote + ":" + $c.Kms.Cible.Port + " : joignable en " + $c.Kms.Test.Ms + " ms.")
+    } else {
+        Add-Journal $Fenetre "err" ("Test TCP du KMS " + $c.Kms.Cible.Hote + ":" + $c.Kms.Cible.Port + " : injoignable (" + $c.Kms.Test.Motif + ").")
+    }
+}
+
+# --- Animations : seulement en interactif ----------------------------------
+# En capture, aucune animation n'est demarree : la reference reste identique au
+# pixel d'un rendu a l'autre.
+$script:minuterieActivite = $null
+$script:etapeEncours = 0
+$script:phaseActivite = $false
+
+function Start-Activite {
+    param($Fenetre)
+    if ($null -ne $script:minuterieActivite) { $script:minuterieActivite.Start() ; return }
+    $script:minuterieActivite = New-Object System.Windows.Threading.DispatcherTimer
+    $script:minuterieActivite.Interval = [TimeSpan]::FromMilliseconds(40)
+    $script:minuterieActivite.Add_Tick({
+        $fen = $script:fenetre
+        if ($null -eq $fen) { return }
+        $segment = $fen.FindName("SegmentActivite")
+        $course = [math]::Max(1, $fen.FindName("BandeActivite").ActualWidth - $segment.Width)
+        $segment.RenderTransform.X = (($segment.RenderTransform.X + 16) % $course)
+        $script:phaseActivite = -not $script:phaseActivite
+        $segment.Opacity = if ($script:phaseActivite) { 1 } else { 0.55 }
+        if ($script:etapeEncours -ge 1) {
+            $glyphe = $fen.FindName("Glyphe$($script:etapeEncours)")
+            if ($null -ne $glyphe -and $null -ne $glyphe.RenderTransform) { $glyphe.RenderTransform.Angle = ($glyphe.RenderTransform.Angle + 30) % 360 }
+        }
+    })
+    $script:minuterieActivite.Start()
+}
+
+function Stop-Activite {
+    if ($null -ne $script:minuterieActivite) { $script:minuterieActivite.Stop() }
+}
+
+function Set-Activite {
+    # Barre d'activite visible seulement pendant une etape : elle montre le travail
+    # de fond, et son segment glisse au lieu de faire semblant d'avancer.
+    param($Fenetre, [bool]$Actif)
+    $Fenetre.FindName("BandeActivite").Visibility = if ($Actif) { "Visible" } else { "Collapsed" }
+    if ($null -eq $script:minuterieActivite) { return }
+    if ($Actif) { Start-Activite $Fenetre } else { Stop-Activite }
+}
+
+function Set-PointsEtape {
+    # Points de verification de l'etape en cours : un glyphe par point, vert quand
+    # il est franchi, bleu pendant la mesure, gris avant.
+    param($Fenetre, [string[]]$Points)
+    $zone = $Fenetre.FindName("PointsEtape")
+    $zone.Children.Clear()
+    foreach ($p in $Points) {
+        $bout = ([string]$p).Split("|", 2)
+        if ($bout.Count -lt 2) { continue }
+        $e = $etatsPreVol[$bout[0]]
+        $bloc = New-Object System.Windows.Controls.StackPanel
+        $bloc.Orientation = "Horizontal"
+        $bloc.Margin = New-Object System.Windows.Thickness(0, 0, 14, 0)
+        $icone = New-Object System.Windows.Controls.TextBlock
+        $icone.Text = $e.Glyphe
+        $icone.FontFamily = $policeIcone
+        $icone.FontSize = 11
+        $icone.Foreground = Get-Pinceau $e.Couleur
+        $icone.VerticalAlignment = "Center"
+        $texte = New-Object System.Windows.Controls.TextBlock
+        $texte.Text = $bout[1]
+        $texte.FontSize = 11
+        $texte.Margin = New-Object System.Windows.Thickness(5, 0, 0, 0)
+        $texte.Foreground = Get-Pinceau $(if ($bout[0] -eq "attente") { "#8A8A8A" } else { $e.Couleur })
+        $texte.VerticalAlignment = "Center"
+        [void]$bloc.Children.Add($icone)
+        [void]$bloc.Children.Add($texte)
+        [void]$zone.Children.Add($bloc)
+    }
+}
+
 function Set-Etape {
     param($Fenetre, [int]$Index, [string]$Etat)
     $e = $renduEtapes[$Etat]
@@ -107,7 +359,16 @@ function Set-Etape {
     $info   = $Fenetre.FindName("Etat$Index")
     $puce.Background = Get-Pinceau $e.Fond
     $glyphe.Foreground = Get-Pinceau $e.Texte
-    if ($Etat -eq "attente" -or $Etat -eq "encours") {
+    if ($Etat -eq "encours") {
+        # Anneau de chargement dans la puce : le glyphe tourne pendant l'etape.
+        $glyphe.Text = [string][char]0xE895
+        $glyphe.FontFamily = $policeIcone
+        $glyphe.FontWeight = "Normal"
+        $glyphe.FontSize = 12
+        $glyphe.RenderTransformOrigin = New-Object System.Windows.Point(0.5, 0.5)
+        $glyphe.RenderTransform = New-Object System.Windows.Media.RotateTransform
+        $script:etapeEncours = $Index
+    } elseif ($Etat -eq "attente") {
         $glyphe.Text = [string]$Index
         $glyphe.FontFamily = $policeTexte
         $glyphe.FontWeight = "SemiBold"
@@ -117,6 +378,13 @@ function Set-Etape {
         $glyphe.FontFamily = $policeIcone
         $glyphe.FontWeight = "Normal"
         $glyphe.FontSize = 11
+    }
+    # Une puce qui quitte l'etat "encours" abandonne sa rotation : sans cela le
+    # glyphe termine resterait incline de l'angle ou l'animation l'a laisse, et la
+    # minuterie continuerait de tourner sur une etape qui n'avance plus.
+    if ($Etat -ne "encours") {
+        $glyphe.RenderTransform = $null
+        if ($script:etapeEncours -eq $Index) { $script:etapeEncours = 0 }
     }
     $titre.Foreground = Get-Pinceau $(if ($Etat -eq "attente" -or $Etat -eq "saute") { "#1B1B1B" } else { $e.Texte })
     $cle = "Etat" + $Etat.Substring(0, 1).ToUpper() + $Etat.Substring(1)
@@ -174,20 +442,30 @@ function Update-Options {
 # basculent (P), la jauge, le statut, le detail et les lignes "niveau|texte".
 $scenario = @(
     @{ P = @{ 1 = "encours" } ; J = 4 ; S = "Recherche d'une installation existante..." ; D = "Etape 1 sur 5" ;
+       C = @("encours|ospp.vbs /dstatus", "attente|produits detectes", "attente|desinstallation") ;
        L = @("etape|Etape 1/5 - Desinstallation", "info|Detection des produits Office installes (ospp.vbs /dstatus).") }
     @{ P = @{ 1 = "saute" ; 2 = "encours" } ; J = 14 ; S = "Verifications pre-vol" ; D = "Etape 2 sur 5" ;
-       L = @("ok|Aucune version precedente a retirer : etape ignoree.", "etape|Etape 2/5 - Preparation", "info|setup.exe present, 212 Go libres, KMS joignable.") }
+       C = @("ok|setup.exe", "ok|espace disque", "encours|KMS", "attente|Windows") ;
+       L = @("ok|Aucune version precedente a retirer : etape ignoree.", "etape|Etape 2/5 - Preparation",
+             "info|Pre-vol : setup.exe present, 212 Go libres, Windows 11 24H2 (26100).",
+             "info|Test TCP du KMS kms.ac-nancy.fr:1688 : joignable en 42 ms.") }
     @{ P = @{ 2 = "termine" ; 3 = "encours" } ; J = 28 ; S = "Copie des sources depuis le depot" ; D = "Etape 3 sur 5" ;
+       C = @("ok|dossier cree", "encours|copie", "attente|6,8 Go verifies") ;
        L = @("ok|Configuration ODT generee (ProPlus2024Volume, PerpetualVL2024).", "etape|Etape 3/5 - Sources", "info|robocopy \\serveur\office -> C:\Office2024\sources") }
     @{ J = 46 ; S = "Copie des sources depuis le depot" ; D = "Etape 3 sur 5" ;
+       C = @("ok|dossier cree", "encours|copie", "attente|6,8 Go verifies") ;
        L = @("info|4,1 Go copies sur 6,8 Go (60 %).") }
     @{ P = @{ 3 = "termine" ; 4 = "encours" } ; J = 66 ; S = "Installation Click-to-Run en cours" ; D = "Etape 4 sur 5" ;
+       C = @("ok|Click-to-Run", "encours|applications", "attente|configuration") ;
        L = @("ok|Sources pretes : 6,8 Go dans C:\Office2024\sources.", "etape|Etape 4/5 - Installation", "info|setup.exe /configure OfficeConfig2024.xml (silencieux).") }
     @{ J = 82 ; S = "Installation Click-to-Run en cours" ; D = "Etape 4 sur 5" ;
+       C = @("ok|Click-to-Run", "encours|applications", "attente|configuration") ;
        L = @("info|Click-to-Run : installation des applications Office...") }
     @{ P = @{ 4 = "termine" ; 5 = "encours" } ; J = 94 ; S = "Activation KMS" ; D = "Etape 5 sur 5" ;
+       C = @("encours|ospp.vbs /sethst", "attente|activation", "attente|licence") ;
        L = @("ok|Office installe : 16h32.", "etape|Etape 5/5 - Activation KMS", "info|ospp.vbs /sethst:kms.ac-nancy.fr:1688") }
     @{ P = @{ 5 = "termine" } ; J = 100 ; S = "Deploiement termine" ; D = "5 etapes sur 5" ;
+       C = @("ok|ospp.vbs /sethst", "ok|activation", "ok|licence") ;
        L = @("ok|Activation KMS reussie : licence perpetuelle accordee.", "ok|Configuration proxy restauree (acces direct), port du relais libere.", "ok|Deploiement termine sans erreur.") }
 )
 
@@ -195,7 +473,15 @@ function Set-Scene {
     param($Fenetre, [int]$Index)
     if ($Index -lt 0 -or $Index -ge $scenario.Count) { return }
     $s = $scenario[$Index]
-    if ($s.ContainsKey("P")) { foreach ($n in @($s.P.Keys)) { Set-Etape $Fenetre $n $s.P[$n] } }
+    $actif = $false
+    if ($s.ContainsKey("P")) {
+        foreach ($n in @($s.P.Keys)) {
+            Set-Etape $Fenetre $n $s.P[$n]
+            if ($s.P[$n] -eq "encours") { $actif = $true }
+        }
+    }
+    Set-Activite $Fenetre $actif
+    if ($s.ContainsKey("C")) { Set-PointsEtape $Fenetre $s.C }
     $Fenetre.FindName("Jauge").Value = $s.J
     $Fenetre.FindName("EtapePourcent").Text = ("{0} %" -f $s.J)
     $Fenetre.FindName("StatutTexte").Text = $s.S
@@ -212,6 +498,8 @@ function Reset-Scene {
     for ($i = 1; $i -le 5; $i++) { Set-Etape $Fenetre $i "attente" }
     $Fenetre.FindName("Jauge").Value = 0
     $Fenetre.FindName("EtapePourcent").Text = "0 %"
+    Set-Activite $Fenetre $false
+    Set-PointsEtape $Fenetre @()
 }
 
 function Get-TailleCapture {
@@ -471,6 +759,8 @@ if ($Capture -ne "") {
         Export-Fenetre $planche $Capture
     } else {
         $win = Import-Xaml "Principal.xaml"
+        # Capture : valeurs de reference, sauf -Mesure qui interroge vraiment le poste.
+        if ($Mesure) { Update-PreVol $win } else { Update-PreVol $win -Simule }
         for ($k = 0; $k -le $Etape; $k++) { Set-Scene $win $k }
         if ($Focus -ne "") { Set-FocusCapture $win $Focus }
         Export-Fenetre $win $Capture
@@ -496,9 +786,7 @@ $win.FindName("BtnEffacer").Add_Click({
     $win.FindName("Journal").Children.Clear()
     Add-Journal $win "info" "Journal efface."
 })
-$win.FindName("BtnRafraichir").Add_Click({
-    Add-Journal $win "info" "Verifications pre-vol relancees : setup.exe, espace disque, reseau, Windows."
-})
+$win.FindName("BtnRafraichir").Add_Click({ Update-PreVol $win })
 $win.FindName("BtnReliquat").Add_Click({ Show-Reliquat $win })
 $win.FindName("BtnApps").Add_Click({ Show-Applications $win })
 
@@ -512,6 +800,8 @@ foreach ($n in @("ChkDepot", "ChkProxy", "ChkKms", "ChkCle", "RadXmlAuto", "RadX
     $win.FindName($n).Add_Click({ Update-Options $win })
 }
 Update-Options $win
+# Pre-vol mesure des l'ouverture : l'ecran ne montre que ce qui a ete constate.
+Update-PreVol $win
 
 # Parcourir : vraies boites de dialogue systeme, aucune ecriture.
 $win.FindName("BtnSetup").Add_Click({
@@ -531,13 +821,32 @@ $win.FindName("BtnDepot").Add_Click({
     $d.Description = "Dossier contenant le sous-dossier 'Office' produit par setup.exe /download"
     if ($d.ShowDialog() -eq "OK") { $win.FindName("ChampDepot").Text = $d.SelectedPath }
 })
+# Tests reels : une connexion TCP de mesure, dont le resultat porte la duree ou le
+# motif de l'echec. Rien n'est affirme sans que la connexion ait abouti.
 $win.FindName("BtnTestProxy").Add_Click({
-    Add-Journal $win "info" ("Test du proxy " + $win.FindName("ChampProxy").Text + ":" + $win.FindName("ChampPort").Text + "...")
-    Add-Journal $win "ok" "Proxy joignable : 200 Connection established en 42 ms."
+    $hote = $win.FindName("ChampProxy").Text.Trim()
+    $port = 0
+    [void][int]::TryParse($win.FindName("ChampPort").Text, [ref]$port)
+    if ($hote -eq "" -or $port -le 0) {
+        Add-Journal $win "avr" "Test du proxy impossible : renseignez l'adresse et le port."
+        return
+    }
+    Add-Journal $win "info" ("Test TCP du proxy " + $hote + ":" + $port + "...")
+    $t = Test-PortTcp $hote $port
+    if ($t.Ok) { Add-Journal $win "ok" ("Proxy joignable (TCP) : " + $hote + ":" + $port + " en " + $t.Ms + " ms. Le tunnel CONNECT n'est pas teste ici.") }
+    else { Add-Journal $win "err" ("Proxy injoignable : " + $hote + ":" + $port + " (" + $t.Motif + ").") }
 })
 $win.FindName("BtnTestKms").Add_Click({
-    Add-Journal $win "info" ("Connexion KMS " + $win.FindName("ChampKms").Text + ":1688...")
-    Add-Journal $win "ok" "Connexion KMS reussie sur kms.ac-nancy.fr:1688."
+    $cible = Split-HotePort $win.FindName("ChampKms").Text 1688
+    if ($null -eq $cible) {
+        Add-Journal $win "avr" "Test KMS impossible : renseignez l'adresse du serveur."
+        return
+    }
+    Add-Journal $win "info" ("Test TCP du KMS " + $cible.Hote + ":" + $cible.Port + "...")
+    $t = Test-PortTcp $cible.Hote $cible.Port
+    if ($t.Ok) { Add-Journal $win "ok" ("KMS joignable : " + $cible.Hote + ":" + $cible.Port + " en " + $t.Ms + " ms.") }
+    else { Add-Journal $win "err" ("KMS injoignable : " + $cible.Hote + ":" + $cible.Port + " (" + $t.Motif + ").") }
+    Update-PreVol $win -KmsDeja @{ Cible = $cible ; Test = $t }
 })
 
 $script:i = 0
@@ -546,7 +855,7 @@ $script:minuterie.Interval = [TimeSpan]::FromMilliseconds(1300)
 $script:minuterie.Add_Tick({
     Set-Scene $script:fenetre $script:i
     $script:i++
-    if ($script:i -ge $scenario.Count) { $script:minuterie.Stop() }
+    if ($script:i -ge $scenario.Count) { $script:minuterie.Stop() ; Set-Activite $script:fenetre $false }
 })
 $win.FindName("BtnInstaller").Add_Click({
     $script:fenetre.FindName("Journal").Children.Clear()
