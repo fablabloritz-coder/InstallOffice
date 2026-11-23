@@ -200,7 +200,8 @@
               </Grid>
 
               <!-- Points de verification de l'etape en cours : remplis par le script
-                   (un glyphe par point, vert franchi, bleu en cours, gris a venir). -->
+                   (un glyphe par point : vert pour un resultat constate, rouge pour un
+                   echec ; la planche des etats montre aussi les etats a venir). -->
               <StackPanel Orientation="Horizontal" Margin="0,9,0,0">
                 <TextBlock Text="Points de contrôle" Style="{StaticResource Secondaire}"
                            VerticalAlignment="Center" Margin="0,0,10,0"/>
