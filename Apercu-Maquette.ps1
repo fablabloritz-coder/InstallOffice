@@ -133,10 +133,8 @@ function Test-PortTcp {
     # affiche ne peut donc jamais etre plus sur que la mesure elle-meme.
     param([string]$Hote, [int]$Port, [int]$Delai = 1500)
     $resultat = @{ Ok = $false ; Ms = 0 ; Motif = "" }
-    if ([string]::IsNullOrWhiteSpace($Hote) -or $Port -le 0 -or $Port -gt 65535) {
-        $resultat.Motif = "adresse ou port invalide"
-        return $resultat
-    }
+    # Adresse et port sont deja valides par les appelants (Split-HotePort rend $null sur
+    # une adresse vide) : inutile de rejouer ce controle ici.
     $client = New-Object System.Net.Sockets.TcpClient
     $chrono = [System.Diagnostics.Stopwatch]::StartNew()
     try {
@@ -171,25 +169,24 @@ function Get-VersionWindows {
     # Deux formes : Libelle pour le journal et le pied de carte, Court pour la ligne
     # de la carte, dont l'etiquette porte deja le mot Windows.
     $court = if ($majeure -ge 10) { (([string]$majeure + " " + ($morceaux -join " ")).Trim()) } else { "inconnu" }
-    return @{ Ok = ($majeure -ge 10) ; Majeure = $majeure ; Court = $court ; Libelle = ("Windows " + $court) }
+    return @{ Ok = ($majeure -ge 10) ; Court = $court ; Libelle = ("Windows " + $court) }
 }
 
 function Get-PreVol {
-    param([string]$SetupSaisi, [string]$KmsSaisi, [bool]$KmsActif, $KmsDeja = $null)
+    param([string]$SetupSaisi, [string]$KmsSaisi, [bool]$KmsActif)
     $setup  = Resolve-SetupPath $SetupSaisi
     $disque = Get-PSDrive C -ErrorAction SilentlyContinue
     $libre  = if ($disque) { [math]::Round($disque.Free / 1GB, 1) } else { 0 }
     $kms = $null
     if ($KmsActif) {
-        if ($null -ne $KmsDeja) { $kms = $KmsDeja }
-        else {
-            $cible = Split-HotePort $KmsSaisi 1688
-            if ($null -ne $cible) { $kms = @{ Cible = $cible ; Test = (Test-PortTcp $cible.Hote $cible.Port) } }
-        }
+        $cible = Split-HotePort $KmsSaisi 1688
+        if ($null -ne $cible) { $kms = @{ Cible = $cible ; Test = (Test-PortTcp $cible.Hote $cible.Port) } }
     }
     return @{
         Setup        = $setup
-        SetupPresent = ((-not [string]::IsNullOrWhiteSpace($setup)) -and (Test-Path -LiteralPath $setup))
+        # Resolve-SetupPath ne rend jamais une chaine vide : il retombe sur setup.exe
+        # a cote du script.
+        SetupPresent = (Test-Path -LiteralPath $setup)
         LibreGo      = $libre
         # 4 Go : le seuil du moteur ($DISK_MIN_GB).
         AssezDEspace = ($libre -ge 4)
@@ -206,7 +203,6 @@ $etatsPreVol = @{
     ok      = @{ Glyphe = [string][char]0xE73E ; Couleur = "#0F7B0F" }
     encours = @{ Glyphe = [string][char]0xE895 ; Couleur = "#0F6CBD" }
     attente = @{ Glyphe = [string][char]0xE738 ; Couleur = "#8A8A8A" }
-    alerte  = @{ Glyphe = [string][char]0xE7BA ; Couleur = "#9D5D00" }
     erreur  = @{ Glyphe = [string][char]0xE711 ; Couleur = "#C42B1C" }
 }
 
@@ -223,14 +219,14 @@ function Set-LignePreVol {
     if ($null -eq $champ) { throw "Valeur pre-vol '$Ligne' introuvable dans la fenetre." }
     $champ.Text = $Valeur
     # La valeur reste discrete quand tout va bien ; sinon elle prend la couleur de
-    # l'alerte, pour que le probleme se lise sans chercher la ligne.
+    # l'erreur, pour que le probleme se lise sans chercher la ligne.
     $champ.Foreground = Get-Pinceau $(if ($Etat -eq "ok" -or $Etat -eq "attente") { "#5D5D5D" } else { $e.Couleur })
 }
 
 function Update-PreVol {
     # Remplit la carte pre-vol : mesures reelles par defaut ; valeurs de reference
     # avec -Simule, quand une capture doit rester reproductible au pixel.
-    param($Fenetre, [switch]$Simule, $KmsDeja = $null)
+    param($Fenetre, [switch]$Simule)
     if ($Simule) {
         # La parenthese autour de FindResource n'est pas decorative : sans elle, le
         # transtypage s'applique a la methode et la valeur affichee est son nom.
@@ -245,7 +241,7 @@ function Update-PreVol {
     $activerKms = [bool]$Fenetre.FindName("ChkKms").IsChecked
     $c = Get-PreVol -SetupSaisi $Fenetre.FindName("ChampSetup").Text `
                     -KmsSaisi $Fenetre.FindName("ChampKms").Text `
-                    -KmsActif $activerKms -KmsDeja $KmsDeja
+                    -KmsActif $activerKms
 
     if ($c.SetupPresent) { Set-LignePreVol $Fenetre "Setup" "ok" ([string]$Fenetre.FindResource("PreVolPresent")) }
     else { Set-LignePreVol $Fenetre "Setup" "erreur" ([string]$Fenetre.FindResource("PreVolAbsent")) }
@@ -283,44 +279,31 @@ function Update-PreVol {
 # pixel d'un rendu a l'autre.
 $script:minuterieActivite = $null
 $script:etapeEncours = 0
-$script:phaseActivite = $false
 # Seul l'interactif anime : la capture doit rester reproductible au pixel.
 $script:animer = ($Capture -eq "")
 
-function Start-Activite {
-    param($Fenetre)
-    if ($null -ne $script:minuterieActivite) { $script:minuterieActivite.Start() ; return }
-    $script:minuterieActivite = New-Object System.Windows.Threading.DispatcherTimer
-    $script:minuterieActivite.Interval = [TimeSpan]::FromMilliseconds(40)
-    $script:minuterieActivite.Add_Tick({
-        $fen = $script:fenetre
-        if ($null -eq $fen) { return }
-        $segment = $fen.FindName("SegmentActivite")
-        $course = [math]::Max(1, $fen.FindName("BandeActivite").ActualWidth - $segment.Width)
-        $segment.RenderTransform.X = (($segment.RenderTransform.X + 16) % $course)
-        $script:phaseActivite = -not $script:phaseActivite
-        $segment.Opacity = if ($script:phaseActivite) { 1 } else { 0.55 }
-        if ($script:etapeEncours -ge 1) {
-            $glyphe = $fen.FindName("Glyphe$($script:etapeEncours)")
-            if ($null -ne $glyphe -and $null -ne $glyphe.RenderTransform) { $glyphe.RenderTransform.Angle = ($glyphe.RenderTransform.Angle + 30) % 360 }
-        }
-    })
-    $script:minuterieActivite.Start()
-}
-
-function Stop-Activite {
-    if ($null -ne $script:minuterieActivite) { $script:minuterieActivite.Stop() }
-}
-
 function Set-Activite {
-    # Barre d'activite visible seulement pendant une etape : elle montre le travail
-    # de fond, et son segment glisse au lieu de faire semblant d'avancer.
+    # Barre d'activite et anneau de l'etape en cours : deux mouvements, une seule
+    # minuterie. Elle est creee a la premiere activation, et rien n'est demarre en
+    # capture, ou l'image doit rester identique d'un rendu a l'autre.
     param($Fenetre, [bool]$Actif)
     $Fenetre.FindName("BandeActivite").Visibility = if ($Actif) { "Visible" } else { "Collapsed" }
-    # Le garde porte sur le mode, pas sur la minuterie : celle-ci est nulle au premier
-    # passage et Start-Activite est justement ce qui la cree.
     if (-not $script:animer) { return }
-    if ($Actif) { Start-Activite $Fenetre } else { Stop-Activite }
+    if ($null -eq $script:minuterieActivite) {
+        if (-not $Actif) { return }
+        $script:minuterieActivite = New-Object System.Windows.Threading.DispatcherTimer
+        $script:minuterieActivite.Interval = [TimeSpan]::FromMilliseconds(40)
+        $script:minuterieActivite.Add_Tick({
+            $fen = $script:fenetre
+            if ($null -eq $fen) { return }
+            $segment = $fen.FindName("SegmentActivite")
+            $course = [math]::Max(1, $fen.FindName("BandeActivite").ActualWidth - $segment.Width)
+            $segment.RenderTransform.X = (($segment.RenderTransform.X + 16) % $course)
+            $glyphe = $fen.FindName("Glyphe$($script:etapeEncours)")
+            if ($null -ne $glyphe -and $null -ne $glyphe.RenderTransform) { $glyphe.RenderTransform.Angle = ($glyphe.RenderTransform.Angle + 30) % 360 }
+        })
+    }
+    if ($Actif) { $script:minuterieActivite.Start() } else { $script:minuterieActivite.Stop() }
 }
 
 function Set-PointsEtape {
@@ -331,7 +314,7 @@ function Set-PointsEtape {
     $zone.Children.Clear()
     foreach ($p in $Points) {
         $bout = ([string]$p).Split("|", 2)
-        if ($bout.Count -lt 2) { continue }
+        if ($bout.Count -lt 2) { throw "Point de controle illisible : '$p' (attendu etat|texte)." }
         $e = $etatsPreVol[$bout[0]]
         $bloc = New-Object System.Windows.Controls.StackPanel
         $bloc.Orientation = "Horizontal"
@@ -457,13 +440,11 @@ $scenario = @(
        C = @("ok|dossier cree", "encours|copie", "attente|6,8 Go verifies") ;
        L = @("ok|Configuration ODT generee (ProPlus2024Volume, PerpetualVL2024).", "etape|Etape 3/5 - Sources", "info|robocopy \\serveur\office -> C:\Office2024\sources") }
     @{ J = 46 ; S = "Copie des sources depuis le depot" ; D = "Etape 3 sur 5" ;
-       C = @("ok|dossier cree", "encours|copie", "attente|6,8 Go verifies") ;
        L = @("info|4,1 Go copies sur 6,8 Go (60 %).") }
     @{ P = @{ 3 = "termine" ; 4 = "encours" } ; J = 66 ; S = "Installation Click-to-Run en cours" ; D = "Etape 4 sur 5" ;
        C = @("ok|Click-to-Run", "encours|applications", "attente|configuration") ;
        L = @("ok|Sources pretes : 6,8 Go dans C:\Office2024\sources.", "etape|Etape 4/5 - Installation", "info|setup.exe /configure OfficeConfig2024.xml (silencieux).") }
     @{ J = 82 ; S = "Installation Click-to-Run en cours" ; D = "Etape 4 sur 5" ;
-       C = @("ok|Click-to-Run", "encours|applications", "attente|configuration") ;
        L = @("info|Click-to-Run : installation des applications Office...") }
     @{ P = @{ 4 = "termine" ; 5 = "encours" } ; J = 94 ; S = "Activation KMS" ; D = "Etape 5 sur 5" ;
        C = @("encours|ospp.vbs /sethst", "attente|activation", "attente|licence") ;
@@ -840,18 +821,10 @@ $win.FindName("BtnTestProxy").Add_Click({
     if ($t.Ok) { Add-Journal $win "ok" ("Proxy joignable (TCP) : " + $hote + ":" + $port + " en " + $t.Ms + " ms. Le tunnel CONNECT n'est pas teste ici.") }
     else { Add-Journal $win "err" ("Proxy injoignable : " + $hote + ":" + $port + " (" + $t.Motif + ").") }
 })
-$win.FindName("BtnTestKms").Add_Click({
-    $cible = Split-HotePort $win.FindName("ChampKms").Text 1688
-    if ($null -eq $cible) {
-        Add-Journal $win "avr" "Test KMS impossible : renseignez l'adresse du serveur."
-        return
-    }
-    Add-Journal $win "info" ("Test TCP du KMS " + $cible.Hote + ":" + $cible.Port + "...")
-    $t = Test-PortTcp $cible.Hote $cible.Port
-    if ($t.Ok) { Add-Journal $win "ok" ("KMS joignable : " + $cible.Hote + ":" + $cible.Port + " en " + $t.Ms + " ms.") }
-    else { Add-Journal $win "err" ("KMS injoignable : " + $cible.Hote + ":" + $cible.Port + " (" + $t.Motif + ").") }
-    Update-PreVol $win -KmsDeja @{ Cible = $cible ; Test = $t }
-})
+# Un seul chemin pour le pre-vol : le bouton KMS relance la meme mesure que
+# Rafraichir. Il n'a pas son propre journal, sinon un seul test produisait trois
+# lignes et deux connexions.
+$win.FindName("BtnTestKms").Add_Click({ Update-PreVol $win })
 
 $script:i = 0
 $script:minuterie = New-Object System.Windows.Threading.DispatcherTimer
