@@ -156,8 +156,11 @@ sans mettre la documentation à jour fait donc échouer le contrôle, localement
 GitHub. C'est ce qui empêche le chiffre annoncé de dériver à nouveau (60, 67, 69…).
 
 Les quatre captures de `Maquette\` sont régénérées par la suite (hors mode `-Fast`) et
-comparées au pixel aux PNG livrés : une retouche du XAML qui laisse les images en arrière
-est signalée au lieu de passer inaperçue.
+comparées au pixel aux PNG livrés. Cette comparaison dépendant des polices du poste,
+`Maquette\captures.txt` enregistre en plus l'empreinte des cinq XAML et du script : une
+référence périmée est détectée même là où le rendu diffère, et le pixel ne tranche que sur
+une pile de polices identique à celle des références. Après régénération des PNG :
+`Test-InstallOffice.ps1 -EnregistrerCaptures`.
 
 Avant livraison, la suite exporte le dépôt (`git archive HEAD`, l'archive que sert le
 bouton **Code → Download ZIP**), vérifie qu'elle contient `Maquette\`, le moteur et

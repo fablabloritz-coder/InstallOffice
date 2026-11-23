@@ -25,7 +25,7 @@
     Code de sortie : 0 si tous les controles passent, 1 sinon.
 #>
 
-param([switch]$Fast)
+param([switch]$Fast, [switch]$EnregistrerCaptures)
 
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Drawing | Out-Null
@@ -50,6 +50,38 @@ function Check {
 }
 
 function Section { param([string]$T) Write-Host "" ; Write-Host ("=== " + $T + " ===") }
+
+function Get-EmpreinteSources {
+    # SHA-256 des cinq XAML et du script, fins de ligne normalisees : le meme sur tout
+    # checkout, quel que soit core.autocrlf. C'est la preuve independante du rendu.
+    param([string]$Racine)
+    $fichiers = @((Join-Path $Racine "Apercu-Maquette.ps1")) + @(Get-ChildItem -LiteralPath (Join-Path $Racine "Maquette") -Filter "*.xaml" | Sort-Object Name | ForEach-Object { $_.FullName })
+    $flux = New-Object System.IO.MemoryStream
+    foreach ($f in $fichiers) {
+        $texte = (Split-Path $f -Leaf) + "`n" + (([System.IO.File]::ReadAllText($f)) -replace "`r`n", "`n") + "`n"
+        $octets = [System.Text.Encoding]::UTF8.GetBytes($texte)
+        $flux.Write($octets, 0, $octets.Length)
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $hash = [System.BitConverter]::ToString($sha.ComputeHash($flux.ToArray())).Replace("-", "")
+    $flux.Dispose()
+    return $hash
+}
+
+function Get-EmpreinteRendu {
+    # Polices que les captures utilisent, resolues sur ce poste : la comparaison au pixel
+    # n'a de sens que si ce sont celles qui ont produit les references.
+    Add-Type -AssemblyName PresentationCore
+    $lignes = @()
+    foreach ($nom in @("Segoe UI Variable Text, Segoe UI", "Segoe MDL2 Assets, Segoe UI", "Cascadia Mono, Consolas")) {
+        $tf = New-Object System.Windows.Media.Typeface((New-Object System.Windows.Media.FontFamily($nom)), [System.Windows.FontStyles]::Normal, [System.Windows.FontWeights]::Normal, [System.Windows.FontStretches]::Normal)
+        $gt = $null
+        $uri = if ($tf.TryGetGlyphTypeface([ref]$gt)) { $gt.FontUri.ToString().ToLowerInvariant() } else { "(absent)" }
+        $lignes += ($nom + "=" + $uri)
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    return ([System.BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes(($lignes -join "`n")))).Replace("-", ""))
+}
 
 # ---------------------------------------------------------------- extraction
 function Get-WorkerBody {
@@ -199,6 +231,22 @@ if (-not (Test-Path $MainScript)) { Write-Host ("Interface introuvable : " + $Ma
 if (-not (Test-Path $EngineScript)) { Write-Host ("Moteur introuvable : " + $EngineScript + " (le worker en est extrait)") ; exit 2 }
 New-Item -ItemType Directory -Path $Work -Force | Out-Null
 if ($Fast) { Write-Host "Mode rapide : section 1 seulement (script et proprietes de l'EXE)." }
+
+# Enregistrement des empreintes des references, a lancer apres avoir regenere les quatre
+# captures : la suite les relit, elle ne les ecrit jamais d'elle-meme.
+if ($EnregistrerCaptures) {
+    $fiche = Join-Path $PSScriptRoot "Maquette\captures.txt"
+    $contenu = @(
+        "# Empreintes enregistrees avec les quatre captures de Maquette (Test-InstallOffice.ps1)."
+        "# sources : les cinq XAML et Apercu-Maquette.ps1, fins de ligne normalisees."
+        "# rendu   : polices resolues sur le poste qui a produit les PNG."
+        ("sources " + (Get-EmpreinteSources -Racine $PSScriptRoot))
+        ("rendu " + (Get-EmpreinteRendu))
+    )
+    [System.IO.File]::WriteAllLines($fiche, $contenu, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host ("Captures : empreintes ecrites dans " + $fiche)
+    exit 0
+}
 
 try {
     $src    = [System.IO.File]::ReadAllText($MainScript)
@@ -355,13 +403,14 @@ try {
         exit 1
     }
 
-    # Les quatre captures livrees montrent le XAML livre : les regenerer ici et exiger un
-    # PNG identique a l'octet. Sans ce controle, modifier Maquette\*.xaml laisse des
-    # references qui montrent une interface qui n'existe plus. Le rendu passe par le
-    # PowerShell 5.1 du systeme, en STA, comme les references ; la comparaison portant sur
-    # le fichier, elle depend aussi de la pile de rendu (polices) : sur un poste qui n'est
-    # pas celui des references, les images different pour cette raison-la, et le message ne
-    # peut pas distinguer les deux causes.
+    # Les quatre captures livrees montrent le XAML livre. Deux preuves, dans un seul cas :
+    #  - les sources (les cinq XAML et Apercu-Maquette.ps1) sont enregistrees a cote des PNG
+    #    dans Maquette\captures.txt : une reference perimee est detectable meme la ou le
+    #    rendu differe, aucune police n'entrant dans cette empreinte ;
+    #  - les pixels doivent etre identiques, mais seulement la ou les polices resolues sont
+    #    celles qui ont produit les references (rendu par le PowerShell 5.1 du systeme, en
+    #    STA). Ailleurs la difference vient des polices, pas du XAML : elle est signalee
+    #    sans faire echouer le controle.
     Section "1 bis. Captures de reference : identiques au pixel"
     $captures = @(
         @{ Nom = "apercu-principal.png"    ; Options = @() }
@@ -369,7 +418,25 @@ try {
         @{ Nom = "apercu-applications.png" ; Options = @("-Applications") }
         @{ Nom = "apercu-etats.png"        ; Options = @("-Etats") }
     )
+    $empreinteSources = Get-EmpreinteSources -Racine $PSScriptRoot
+    $empreinteRendu = Get-EmpreinteRendu
+    $fiche = Join-Path $PSScriptRoot "Maquette\captures.txt"
+    $enregistreSources = ""
+    $enregistreRendu = ""
+    if (Test-Path -LiteralPath $fiche) {
+        foreach ($l in [System.IO.File]::ReadAllLines($fiche)) {
+            if ($l -match '^sources\s+([0-9a-fA-F]{64})\s*$') { $enregistreSources = $matches[1].ToLowerInvariant() }
+            elseif ($l -match '^rendu\s+([0-9a-fA-F]{64})\s*$') { $enregistreRendu = $matches[1].ToLowerInvariant() }
+        }
+    }
     $ecartsCapture = @()
+    if ($enregistreSources -eq "") {
+        $ecartsCapture += "Maquette\captures.txt absent ou sans empreinte des sources : les references ne peuvent pas etre datees"
+    } elseif ($enregistreSources -ne $empreinteSources) {
+        $ecartsCapture += ("sources modifiees depuis les references (enregistre " + $enregistreSources.Substring(0, 12) + ", actuel " + $empreinteSources.Substring(0, 12) + ")")
+    }
+    $renduComparable = ($enregistreRendu -ne "") -and ($enregistreRendu -eq $empreinteRendu)
+    $rendusDifferents = @()
     foreach ($c in $captures) {
         $livre = Join-Path $PSScriptRoot ("Maquette\" + $c.Nom)
         if (-not (Test-Path -LiteralPath $livre)) { $ecartsCapture += ($c.Nom + " : PNG livre absent") ; continue }
@@ -389,12 +456,16 @@ try {
             $derniere = @($sortie -split "`r?`n" | Where-Object { $_.Trim() -ne "" })[-1]
             $ecartsCapture += ($c.Nom + " : rendu impossible (code " + $code + " : " + $derniere + ")")
         } elseif ((Get-FileHash -LiteralPath $rendu -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $livre -Algorithm SHA256).Hash) {
-            $ecartsCapture += ($c.Nom + " : different du rendu du XAML actuel")
+            if ($renduComparable) { $ecartsCapture += ($c.Nom + " : different du rendu du XAML actuel") }
+            else { $rendusDifferents += $c.Nom }
         }
     }
-    $detailCaptures = if ($ecartsCapture.Count -eq 0) { "4 rendus identiques aux PNG livres" }
-                      else { ($ecartsCapture -join " ; ") + " - regenerer les quatre captures (memes commandes : -Capture, -Dialogue, -Applications, -Etats) et committer les PNG" }
-    Check "captures : les 4 PNG livres sont le rendu du XAML actuel" ($ecartsCapture.Count -eq 0) $detailCaptures
+    if ($rendusDifferents.Count -gt 0) {
+        Write-Host ("         rendu different sur ce poste (" + ($rendusDifferents -join ", ") + ") : polices autres que celles des references, comparaison au pixel non concluante") -ForegroundColor Yellow
+    }
+    $detailCaptures = if ($ecartsCapture.Count -eq 0) { "references a jour du XAML et rendu identique" }
+                      else { ($ecartsCapture -join " ; ") + " - regenerer les quatre captures (memes commandes : -Capture, -Dialogue, -Applications, -Etats), lancer Test-InstallOffice.ps1 -EnregistrerCaptures, puis committer PNG et Maquette\captures.txt" }
+    Check "captures : references a jour du XAML (empreinte) et rendu identique" ($ecartsCapture.Count -eq 0) $detailCaptures
 
     # fixtures communes
     $fakeExe  = Join-Path $Work "fake_setup.exe"
