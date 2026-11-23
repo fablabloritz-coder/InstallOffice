@@ -294,6 +294,26 @@ try {
         $versionsReadme = @([regex]::Matches($readmeCompil, '(?i)version\s*["`]?([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
         $ecartsVersion = @($versionsReadme | Where-Object { $_ -ne $vi.FileVersion })
         Check "README : versions annoncees = version de l'EXE" (($versionsReadme.Count -gt 0) -and ($ecartsVersion.Count -eq 0)) ("README annonce=" + ($versionsReadme -join ", ") + " EXE=" + $vi.FileVersion + " - aligner le README (commande Invoke-PS2EXE et prose)")
+        # L'Office Deployment Tool a sa propre version, annoncee dans le README juste apres
+        # son nom : elle doit valoir celle du setup.exe livre, sans quoi la prose decrit un
+        # autre outil que le binaire joint au depot. La lecture suit le nom, pas la ligne
+        # (une mention peut etre coupee par un retour a la ligne), et ne retient que le
+        # premier nombre qui le suit : un autre nombre de la meme ligne (relais, version du
+        # programme) n'est pas pris pour celui de l'ODT. Les deux mentions livrees annoncent
+        # la version a 3 et 27 caracteres sans chiffre du nom ; 80 laisse passer un retour a
+        # la ligne sans atteindre le nombre suivant d'une autre phrase.
+        $setupPath = Join-Path $PSScriptRoot "setup.exe"
+        $versionOdt = if (Test-Path -LiteralPath $setupPath) { (Get-Item -LiteralPath $setupPath).VersionInfo.FileVersion } else { "(setup.exe absent)" }
+        $versionsOdt = @([regex]::Matches($readmeCompil, '(?i)Office\s+Deployment\s+Tool[^0-9]{0,80}?([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+        $ecartsOdt = @($versionsOdt | Where-Object { $_ -ne $versionOdt })
+        Check "README : version ODT annoncee = version de setup.exe" (($versionsOdt.Count -gt 0) -and ($ecartsOdt.Count -eq 0)) ("README annonce=" + ($versionsOdt -join ", ") + " setup.exe=" + $versionOdt + " - aligner le README sur le setup.exe livre")
+        # Complement des deux controles precedents : ils n'ancrent que les nombres annonces
+        # comme versions. Tout nombre a quatre parties du README doit donc etre l'une de ces
+        # deux versions ou une adresse de bouclage (le relais local 127.0.0.0/8) ; un nombre
+        # ni l'un ni l'autre est une valeur que rien ne confronte a un fichier livre.
+        $nombresReadme = @([regex]::Matches($readmeCompil, '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+') | ForEach-Object { $_.Value } | Sort-Object -Unique)
+        $horsControle = @($nombresReadme | Where-Object { ($_ -ne $vi.FileVersion) -and ($_ -ne $versionOdt) -and ($_ -notmatch '^127\.') })
+        Check "README : nombres a quatre parties = versions annoncees ou bouclage" ($horsControle.Count -eq 0) ("hors controle=" + ($horsControle -join ", ") + " (attendu : " + $vi.FileVersion + ", " + $versionOdt + " ou 127.0.0.0/8) - remplacer par une version annoncee ou retirer du README")
         Check "EXE : titre" ($vi.FileDescription -eq "Deploiement Office 2024") ("FileDescription=" + $vi.FileDescription + " (attendu : Deploiement Office 2024 / -Title)" + $cons)
         Check "EXE : produit et societe" (($vi.ProductName -eq "InstallOffice") -and ($vi.CompanyName -eq "Lycee Loritz")) ("ProductName=" + $vi.ProductName + " CompanyName=" + $vi.CompanyName + " (attendu : InstallOffice / -Product, Lycee Loritz / -Company)" + $cons)
         Check "EXE : OriginalFilename" ($vi.OriginalFilename -eq "Install-Office2024-KMS.exe") ("OriginalFilename=" + $vi.OriginalFilename + " (attendu : Install-Office2024-KMS.exe, donc compiler directement vers ce nom)" + $cons)
@@ -306,7 +326,7 @@ try {
         Check "livraison : fenetres XAML a cote de l'EXE" (Test-Path -LiteralPath $xamlPrincipal) ("Maquette\Principal.xaml absent : l'EXE ne peut pas dessiner son interface (livrer le dossier Maquette avec l'EXE)")
         # Meme regle pour l'Office Deployment Tool : sans lui, le programme s'ouvre puis
         # refuse tout deploiement. C'est ce qui manquait au ZIP telecharge.
-        Check "livraison : setup.exe a cote de l'EXE" (Test-Path -LiteralPath (Join-Path $PSScriptRoot "setup.exe")) "setup.exe absent : un dossier extrait sans l'Office Deployment Tool ne peut rien installer (livrer setup.exe avec l'EXE, README section Demarrage rapide)"
+        Check "livraison : setup.exe a cote de l'EXE" (Test-Path -LiteralPath $setupPath) "setup.exe absent : un dossier extrait sans l'Office Deployment Tool ne peut rien installer (livrer setup.exe avec l'EXE, README section Demarrage rapide)"
     }
 
     # Mode rapide : le hook pre-commit ne doit pas couter la suite entiere.
