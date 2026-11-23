@@ -165,7 +165,9 @@ une pile de polices identique à celle des références. Après régénération 
 Avant livraison, la suite exporte le dépôt (`git archive HEAD`, l'archive que sert le
 bouton **Code → Download ZIP**), vérifie qu'elle contient `Maquette\`, le moteur et
 `setup.exe`, puis y rejoue la section 1 : un ZIP incomplet est signalé avant d'être
-distribué.
+distribué. Dans une copie déjà extraite du ZIP (pas de `.git`), l'export n'est pas possible :
+la suite vérifie alors la présence des fichiers livrés et le dit, au lieu d'échouer sur
+l'absence de dépôt.
 
 Les fins de ligne font partie du contrat : l'EXE embarque le script en CRLF et le contrôle
 compare des octets, donc `.gitattributes` impose `*.ps1 text eol=crlf` (et `*.exe binary`).

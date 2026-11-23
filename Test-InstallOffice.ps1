@@ -1355,6 +1355,21 @@ public class FakeAuthProxy
     $archiveZip = Join-Path $Work "depot.zip"
     $archiveDir = Join-Path $Work "depot"
     $problemesArchive = @()
+    if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot ".git"))) {
+        # Copie extraite d'un ZIP (Code -> Download ZIP) : il n'y a pas de depot a exporter,
+        # donc l'archive n'est pas rejouable ici. Ce qui reste verifiable l'est : le dossier
+        # porte de quoi faire tourner l'EXE, et la section 1 vient de le confirmer sur cette
+        # meme copie. Un clone et la CI, eux, exportent et verifient l'archive.
+        $manquants = @()
+        foreach ($attendu in @("Maquette\Principal.xaml", "Install-Office2024-KMS.ps1", "setup.exe")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $attendu))) { $manquants += $attendu }
+        }
+        if ($manquants.Count -gt 0) {
+            $problemesArchive += ("copie incomplete : manquants=" + ($manquants -join ", "))
+        } else {
+            Write-Host "         copie sans .git : archive non exportable ici (clone et CI la verifient), fichiers livres presents"
+        }
+    } else {
     $eapArchive = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     $sortieArchive = (& git archive --format=zip -o $archiveZip HEAD 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
@@ -1394,6 +1409,7 @@ public class FakeAuthProxy
         } else {
             $problemesArchive += "section 1 non rejouee : Test-InstallOffice.ps1 absent de l'archive"
         }
+    }
     }
     Check "pre-livraison : l'archive du depot est complete et passe la section 1" ($problemesArchive.Count -eq 0) ($problemesArchive -join " ; ")
 }
