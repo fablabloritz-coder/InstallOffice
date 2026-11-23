@@ -284,6 +284,8 @@ function Update-PreVol {
 $script:minuterieActivite = $null
 $script:etapeEncours = 0
 $script:phaseActivite = $false
+# Seul l'interactif anime : la capture doit rester reproductible au pixel.
+$script:animer = ($Capture -eq "")
 
 function Start-Activite {
     param($Fenetre)
@@ -315,7 +317,9 @@ function Set-Activite {
     # de fond, et son segment glisse au lieu de faire semblant d'avancer.
     param($Fenetre, [bool]$Actif)
     $Fenetre.FindName("BandeActivite").Visibility = if ($Actif) { "Visible" } else { "Collapsed" }
-    if ($null -eq $script:minuterieActivite) { return }
+    # Le garde porte sur le mode, pas sur la minuterie : celle-ci est nulle au premier
+    # passage et Start-Activite est justement ce qui la cree.
+    if (-not $script:animer) { return }
     if ($Actif) { Start-Activite $Fenetre } else { Stop-Activite }
 }
 
