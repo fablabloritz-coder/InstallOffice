@@ -4,8 +4,10 @@ _*.ps1
 _layout.txt
 *.log
 
-# Outil Office Deployment Tool (binaire Microsoft, ~7 Mo) : a telecharger, pas a versionner
-setup.exe
+# L'Office Deployment Tool est versionne (setup.exe, 16.0.18129.20030, signe Microsoft)
+# pour que le ZIP du depot soit utilisable tel quel, sans telechargement supplementaire.
+# Mise a jour : remplacer le fichier par celui du lien Microsoft (README), puis
+# committer le nouveau binaire.
 
 # Sources Office (~3 Go) ecrites par ODT : quand le XML n'a pas de SourcePath,
 # il telecharge dans le repertoire courant, donc parfois ici.

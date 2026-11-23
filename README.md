@@ -9,6 +9,16 @@ L'interface livrée est `Apercu-Maquette.ps1` (fenêtres dans `Maquette/`), comp
 du moteur `Install-Office2024-KMS.ps1`, livré à côté, le scriptblock de déploiement et
 l'exécute tel quel. Les deux fichiers voyagent donc ensemble.
 
+## Démarrage rapide
+
+1. Télécharger le ZIP du dépôt (**Code → Download ZIP**) et l'extraire où vous voulez.
+2. Lancer `Install-Office2024-KMS.exe` et accepter l'élévation demandée.
+3. Renseigner le serveur KMS, choisir le mode, puis « Installer Office 2024 » — ou
+   « Activer seulement » sur un poste déjà équipé.
+
+Le dossier extrait contient tout : le programme, ses fenêtres (`Maquette\`), le moteur et
+`setup.exe`. Rien d'autre à télécharger.
+
 ## Contenu du dépôt
 
 | Fichier | Rôle |
@@ -21,7 +31,7 @@ l'exécute tel quel. Les deux fichiers voyagent donc ensemble.
 | `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (106 cas, `-Fast` pour la section 1 seule) |
 | `.githooks/pre-commit` | Contrôle rapide de l'index avant chaque commit, refuse l'EXE désynchronisé |
 | `.github/workflows/controle-exe.yml` | Suite complète + contrat de fins de ligne (checkout sans conversion) sur GitHub Actions, à chaque push sur `main` et à chaque pull request |
-| `setup.exe` | Office Deployment Tool — **non versionné**, à récupérer (voir ci-dessous) |
+| `setup.exe` | Office Deployment Tool (16.0.18129.20030, signé Microsoft) — versionné pour que le ZIP soit utilisable tel quel |
 
 ## Ce qu'on copie sur un poste
 
@@ -34,7 +44,8 @@ Quatre éléments, dans un même dossier :
 | `Install-Office2024-KMS.ps1` | le moteur, dont le worker est extrait à chaque déploiement |
 | `setup.exe` | Office Deployment Tool (détecté à côté du programme) |
 
-`OfficeConfig2024.xml` n'est utile que pour un XML de référence personnalisé. L'EXE
+Les quatre sont déjà réunis dans le ZIP du dépôt. `OfficeConfig2024.xml` n'est utile que
+pour un XML de référence personnalisé. L'EXE
 retrouve ces fichiers **relativement à lui-même** : un binaire PS2EXE n'a pas de
 `$PSScriptRoot`, le programme retombe donc sur le dossier du binaire. Déplacer l'EXE seul
 sans `Maquette\` ni le `.ps1` le rend inutilisable.
@@ -43,8 +54,9 @@ sans `Maquette\` ni le `.ps1` le rend inutilisable.
 
 - Windows 10/11, 64 bits, PowerShell 5.1
 - Droits administrateur (l'EXE les demande via son manifeste)
-- `setup.exe` (Office Deployment Tool) : <https://www.microsoft.com/download/details.aspx?id=49117>
-  — le placer à côté du script/EXE (il y est détecté automatiquement)
+- `setup.exe` (Office Deployment Tool) : fourni dans le dépôt (16.0.18129.20030). Pour le
+  mettre à jour : <https://www.microsoft.com/download/details.aspx?id=49117>, remplacer le
+  fichier à côté de l'EXE, puis committer le nouveau binaire
 - Serveur KMS joignable sur le port 1688 pour l'activation
 
 ## Les deux modes
