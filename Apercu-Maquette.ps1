@@ -71,7 +71,11 @@ $script:journalLignes = 0
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName System.Windows.Forms
 
+# EXE compile : $MyInvocation.MyCommand.Path porte le chemin du binaire. Un hote qui
+# ne le renseigne pas laisse la chaine vide : le dossier du binaire reste alors la
+# reference, et c'est la que le dossier Maquette est livre.
 $ici      = Split-Path -Parent $MyInvocation.MyCommand.Path
+if ([string]::IsNullOrWhiteSpace($ici)) { $ici = [System.AppDomain]::CurrentDomain.BaseDirectory.TrimEnd([char]'\') }
 $dossier  = Join-Path $ici "Maquette"
 $pinceaux = New-Object System.Windows.Media.BrushConverter
 $policeTexte = New-Object System.Windows.Media.FontFamily("Segoe UI Variable Text, Segoe UI")

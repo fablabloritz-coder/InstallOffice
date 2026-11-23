@@ -1,6 +1,8 @@
 #!/bin/sh
-# Controle avant chaque commit : l'EXE livre doit rester aligne sur le script
-# (empreinte du script embarque) et sur ses proprietes de compilation.
+# Controle avant chaque commit : l'EXE livre doit rester aligne sur le script qu'il
+# embarque (Apercu-Maquette.ps1 : empreinte) et sur ses proprietes de compilation.
+# Install-Office2024-KMS.ps1 est surveille aussi : ce n'est plus le script compile,
+# mais le moteur dont le worker de deploiement est extrait a l'execution.
 #
 # Ce qui est controle est l'INDEX, pas l'arbre de travail : c'est l'index qui
 # part dans le commit. Les fichiers versionnes y sont donc exportes dans un
@@ -35,6 +37,7 @@ racine=$(git rev-parse --show-toplevel) || exit 1
 cd "$racine" || exit 1
 
 modifies=$(git diff --cached --name-only -- \
+    Apercu-Maquette.ps1 \
     Install-Office2024-KMS.ps1 \
     Install-Office2024-KMS.exe \
     Test-InstallOffice.ps1 \

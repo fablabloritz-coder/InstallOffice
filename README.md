@@ -1,20 +1,43 @@
 # InstallOffice — déploiement d'Office LTSC 2024 + activation KMS
 
-Outil graphique (PowerShell / WinForms) pour installer Microsoft Office LTSC 2024
-(`ProPlus2024Volume`, canal `PerpetualVL2024`) puis l'activer par KMS, sur un poste
+Outil graphique (PowerShell / WPF, interface XAML) pour installer Microsoft Office LTSC
+2024 (`ProPlus2024Volume`, canal `PerpetualVL2024`) puis l'activer par KMS, sur un poste
 d'un réseau pédagogique.
+
+L'interface livrée est `Apercu-Maquette.ps1` (fenêtres dans `Maquette/`), compilée dans
+`Install-Office2024-KMS.exe`. Le déroulé d'installation n'est pas réécrit : l'EXE extrait
+du moteur `Install-Office2024-KMS.ps1`, livré à côté, le scriptblock de déploiement et
+l'exécute tel quel. Les deux fichiers voyagent donc ensemble.
 
 ## Contenu du dépôt
 
 | Fichier | Rôle |
 | --- | --- |
-| `Install-Office2024-KMS.ps1` | Source de l'interface (v8.1) |
+| `Apercu-Maquette.ps1` | Interface graphique livrée (WPF/XAML), **script compilé dans l'EXE** |
+| `Maquette/*.xaml` | Fenêtres et styles de l'interface, lus au démarrage — à livrer avec l'EXE |
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
+| `Install-Office2024-KMS.ps1` | Moteur : déroulé de déploiement extrait par l'EXE ; son interface WinForms historique reste exécutable telle quelle |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (103 cas, `-Fast` pour la section 1 seule) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (106 cas, `-Fast` pour la section 1 seule) |
 | `.githooks/pre-commit` | Contrôle rapide de l'index avant chaque commit, refuse l'EXE désynchronisé |
 | `.github/workflows/controle-exe.yml` | Suite complète + contrat de fins de ligne (checkout sans conversion) sur GitHub Actions, à chaque push sur `main` et à chaque pull request |
 | `setup.exe` | Office Deployment Tool — **non versionné**, à récupérer (voir ci-dessous) |
+
+## Ce qu'on copie sur un poste
+
+Quatre éléments, dans un même dossier :
+
+| Élément | Rôle |
+| --- | --- |
+| `Install-Office2024-KMS.exe` | le programme (il demande l'élévation par son manifeste) |
+| `Maquette\` | les fenêtres XAML : sans ce dossier, l'EXE ne peut pas s'ouvrir |
+| `Install-Office2024-KMS.ps1` | le moteur, dont le worker est extrait à chaque déploiement |
+| `setup.exe` | Office Deployment Tool (détecté à côté du programme) |
+
+`OfficeConfig2024.xml` n'est utile que pour un XML de référence personnalisé. L'EXE
+retrouve ces fichiers **relativement à lui-même** : un binaire PS2EXE n'a pas de
+`$PSScriptRoot`, le programme retombe donc sur le dossier du binaire. Déplacer l'EXE seul
+sans `Maquette\` ni le `.ps1` le rend inutilisable.
 
 ## Prérequis
 
@@ -74,7 +97,7 @@ une fermeture normale restaure tout toute seule.
 ## Compilation de l'EXE
 
 ```powershell
-Invoke-PS2EXE -InputFile "Install-Office2024-KMS.ps1" `
+Invoke-PS2EXE -InputFile "Apercu-Maquette.ps1" `
               -OutputFile "Install-Office2024-KMS.exe" `
               -NoConsole -RequireAdmin -x64 `
               -Title "Deploiement Office 2024" `
@@ -85,6 +108,12 @@ Invoke-PS2EXE -InputFile "Install-Office2024-KMS.ps1" `
 ```
 
 (`Install-Module ps2exe` si le module est absent.)
+
+Le binaire garde le nom `Install-Office2024-KMS.exe` : les raccourcis et la documentation
+restent valables, et l'interface WinForms historique peut être retirée sans changer les
+postes. Le script embarqué est `Apercu-Maquette.ps1` — c'est son empreinte qui est
+contrôlée — tandis que le moteur n'est **pas** embarqué : il est lu à l'exécution, à côté
+de l'EXE.
 
 Compiler **directement** vers `Install-Office2024-KMS.exe` : PS2EXE reprend le nom du
 fichier de sortie dans `OriginalFilename`/`InternalName`, or le contrôle vérifie que ces
@@ -104,9 +133,10 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps
 powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps1 -Fast
 ```
 
-`-Fast` ne joue que la section 1 — syntaxe du script, empreinte du script embarqué et
-propriétés de l'EXE — soit quelques secondes : c'est exactement ce que lance le hook avant
-chaque commit. Sans commutateur, la suite complète (103 cas) tourne, comme sur GitHub.
+`-Fast` ne joue que la section 1 — syntaxe de l'interface et du moteur, empreinte du script
+embarqué, propriétés de l'EXE et présence des fichiers livrés avec lui — soit quelques
+secondes : c'est exactement ce que lance le hook avant chaque commit. Sans commutateur, la
+suite complète (106 cas) tourne, comme sur GitHub.
 
 Le **dernier contrôle** de la suite relit ce README, y cherche toutes les mentions
 « N cas » et exige qu'elles valent le total réellement exécuté : un cas ajouté ou retiré
@@ -184,8 +214,9 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
 
 - **avant chaque commit**, le hook `.githooks/pre-commit` lance le contrôle **rapide**
   (`-Fast`, section 1 seule, quelques secondes) dès que
-  `Install-Office2024-KMS.ps1`, `Install-Office2024-KMS.exe`, `Test-InstallOffice.ps1`
-  ou `.gitattributes` est dans le commit, et refuse le commit s'il échoue (les échecs
+  `Apercu-Maquette.ps1`, `Install-Office2024-KMS.ps1`, `Install-Office2024-KMS.exe`,
+  `Test-InstallOffice.ps1` ou `.gitattributes` est dans le commit, et refuse le commit
+  s'il échoue (les échecs
   sont affichés, pas avalés). `.gitattributes` est surveillé parce que retirer
   `*.ps1 text eol=crlf` change les octets livrés : c'était le trou par lequel la
   régression de fins de ligne passait sans bruit. Un commit ne coûte donc pas la suite entière : rejouer 150 s à chaque fois
@@ -201,11 +232,11 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   git config core.hooksPath .githooks
   ```
 
-  Un commit qui ne touche aucun de ces trois fichiers (README, XML, workflow) n'est pas
+  Un commit qui ne touche aucun de ces fichiers (README, XML, workflow) n'est pas
   ralenti ; `git commit --no-verify` reste possible pour un cas exceptionnel, et se voit
   dans l'historique.
 - **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la suite
-  **complète** (103 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
+  **complète** (106 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
   request : un EXE oublié ou compilé autrement fait échouer la vérification côté serveur,
   même si le hook local n'était pas installé — et sans rien imposer à la boucle locale.
 - **le contrat de fins de ligne y est vérifié aussi** : un second job refait un checkout
@@ -219,4 +250,6 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
 - Windows uniquement, architecture 64 bits
 - Proxy authentifié NTLM/Kerberos non pris en charge : seul Basic passe par le relais local (voir ci-dessus)
 - Binaire non signé : SmartScreen peut afficher un avertissement
+- L'EXE n'est pas autonome : `Maquette\` et `Install-Office2024-KMS.ps1` doivent rester
+  à côté de lui (voir « Ce qu'on copie sur un poste »)
 - L'activation KMS suppose que le poste est sur le réseau du lycée (ou en VPN)

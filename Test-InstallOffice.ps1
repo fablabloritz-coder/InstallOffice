@@ -1,6 +1,8 @@
 #Requires -Version 5.1
 <#
-    Controles automatises de Install-Office2024-KMS.ps1
+    Controles automatises de l'interface livree (Apercu-Maquette.ps1, compilee dans
+    Install-Office2024-KMS.exe) et du moteur dont le worker est extrait
+    (Install-Office2024-KMS.ps1, livre a cote de l'EXE)
 
     Rejoue les cas cles SANS toucher au systeme :
       - SourcePath impose/verifie au telechargement et a l'installation
@@ -28,7 +30,12 @@ param([switch]$Fast)
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Drawing | Out-Null
 
-$MainScript = Join-Path $PSScriptRoot "Install-Office2024-KMS.ps1"
+# L'interface livree est Apercu-Maquette.ps1, compilee dans Install-Office2024-KMS.exe.
+# Le moteur Install-Office2024-KMS.ps1 reste livre a cote de l'EXE : c'est de lui que le
+# worker de deploiement est extrait, il fait donc partie du produit.
+$MainScript   = Join-Path $PSScriptRoot "Apercu-Maquette.ps1"
+$EngineScript = Join-Path $PSScriptRoot "Install-Office2024-KMS.ps1"
+$ExePath      = Join-Path $PSScriptRoot "Install-Office2024-KMS.exe"
 $Work       = Join-Path $env:TEMP ("ctl_office_" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 $Fail       = 0
 $Pass       = 0
@@ -185,25 +192,35 @@ function New-HookRepo {
 }
 
 # ---------------------------------------------------------------- execution
-if (-not (Test-Path $MainScript)) { Write-Host ("Script principal introuvable : " + $MainScript) ; exit 2 }
+if (-not (Test-Path $MainScript)) { Write-Host ("Interface introuvable : " + $MainScript) ; exit 2 }
+if (-not (Test-Path $EngineScript)) { Write-Host ("Moteur introuvable : " + $EngineScript + " (le worker en est extrait)") ; exit 2 }
 New-Item -ItemType Directory -Path $Work -Force | Out-Null
 if ($Fast) { Write-Host "Mode rapide : section 1 seulement (script et proprietes de l'EXE)." }
 
 try {
-    $src   = [System.IO.File]::ReadAllText($MainScript)
-    $lines = [System.IO.File]::ReadAllLines($MainScript)
+    $src    = [System.IO.File]::ReadAllText($MainScript)
+    $moteur = [System.IO.File]::ReadAllText($EngineScript)
+    $lines  = [System.IO.File]::ReadAllLines($EngineScript)
 
-    Section "1. Script principal"
+    Section "1. Interface livree et proprietes de l'EXE"
     $tok = $null ; $err = $null
     [void][System.Management.Automation.Language.Parser]::ParseInput($src, [ref]$tok, [ref]$err)
     Check "analyse syntaxique" ((-not $err) -or ($err.Count -eq 0)) (($err | ForEach-Object { "L" + $_.Extent.StartLineNumber + ": " + $_.Message }) -join " ; ")
+    $tokM = $null ; $errM = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($moteur, [ref]$tokM, [ref]$errM)
+    Check "moteur : analyse syntaxique" ((-not $errM) -or ($errM.Count -eq 0)) (($errM | ForEach-Object { "L" + $_.Extent.StartLineNumber + ": " + $_.Message }) -join " ; ")
     $obsoletes = @('bgWorker', 'RunWorkerAsync', 'DEFAULT_XML_PATH', 'proxyUserBox', 'proxyPassBox', 'ProxyPassword')
     $trouves = @($obsoletes | Where-Object { ([regex]::Matches($src, $_)).Count -gt 0 })
     Check "aucun motif obsolete" ($trouves.Count -eq 0) ($trouves -join ", ")
-    Check "proxy authentifie : champs utilisateur et mot de passe" (($src -match '\$proxyAuthUserBox') -and ($src -match '\$proxyAuthPassBox') -and ($src -match 'UseSystemPasswordChar')) "champs d'identifiants absents de l'interface : un proxy qui repond 407 reste alors sans solution"
+    # Les champs vivent dans le XAML de la fenetre principale, le script les remplit :
+    # sans eux, un proxy qui repond 407 reste sans solution.
+    $xamlPrincipal = Join-Path $PSScriptRoot "Maquette\Principal.xaml"
+    $xaml = if (Test-Path -LiteralPath $xamlPrincipal) { [System.IO.File]::ReadAllText($xamlPrincipal) } else { "" }
+    $champsProxy = (($xaml -match '<TextBox x:Name="ChampProxyUser"') -and ($xaml -match '<PasswordBox x:Name="ChampProxyPass"'))
+    Check "proxy authentifie : champs utilisateur et mot de passe" ($champsProxy -and ($src -match '"ChampProxyUser"') -and ($src -match '"ChampProxyPass"')) "champs d'identifiants absents de l'interface : un proxy qui repond 407 reste alors sans solution"
     # La config enregistree porte l'utilisateur, jamais le mot de passe : le relais
     # le garde en memoire, il doit etre ressaisi a chaque lancement.
-    $enregistreUser = ($src -match 'ProxyUser\s+= \$proxyAuthUserBox\.Text\.Trim\(\)')
+    $enregistreUser = ($src -match 'ProxyUser\s*=\s*\$Fenetre\.FindName\("ChampProxyUser"\)')
     $enregistrePass = [regex]::Matches($src, 'ProxyPass\w*\s*=').Count
     Check "proxy authentifie : mot de passe jamais enregistre" ($enregistreUser -and ($enregistrePass -eq 0)) ("ProxyUser enregistre=" + $enregistreUser + " affectations de mot de passe=" + $enregistrePass)
 
@@ -213,17 +230,20 @@ try {
     $crlf = ([regex]::Matches($src, "`r`n")).Count
     $lfSeul = ([regex]::Matches($src, "(?<!`r)`n")).Count
     Check "script principal : fins de ligne CRLF (comme l'EXE embarque)" (($crlf -gt 0) -and ($lfSeul -eq 0)) ("CRLF=" + $crlf + " LF isole=" + $lfSeul + " - clone en LF plutot qu'une derive : obtenir un checkout CRLF (.gitattributes text eol=crlf) avant de conclure a une recompilation")
+    $crlfM = ([regex]::Matches($moteur, "`r`n")).Count
+    $lfSeulM = ([regex]::Matches($moteur, "(?<!`r)`n")).Count
+    Check "moteur : fins de ligne CRLF" (($crlfM -gt 0) -and ($lfSeulM -eq 0)) ("CRLF=" + $crlfM + " LF isole=" + $lfSeulM)
     $attrPath = Join-Path $PSScriptRoot ".gitattributes"
     $attr = if (Test-Path -LiteralPath $attrPath) { [System.IO.File]::ReadAllText($attrPath) } else { "" }
     $declareCrlf = ($attr -match '(?m)^\s*\*\.ps1\s+text\s+eol=crlf\s*$')
     Check "fins de ligne : .gitattributes impose CRLF aux .ps1" $declareCrlf ("declaration absente de .gitattributes : un clone avec core.autocrlf=false produirait un faux RECOMPILER (ajouter : *.ps1 text eol=crlf)")
-    Write-Host ("         " + $lines.Count + " lignes, " + $src.Length + " octets")
+    Write-Host ("         interface " + $src.Length + " octets, moteur " + $lines.Count + " lignes")
 
     # L'EXE distribue embarque le script : son empreinte doit suivre le fichier .ps1.
-    $exePath = Join-Path $PSScriptRoot ([System.IO.Path]::GetFileNameWithoutExtension($MainScript) + ".exe")
+    $exePath = $ExePath
     $sha = [System.Security.Cryptography.SHA256]::Create()
     $hScript = [System.BitConverter]::ToString($sha.ComputeHash([System.IO.File]::ReadAllBytes($MainScript))).Replace("-", "")
-    $recompiler = "RECOMPILER : Invoke-PS2EXE -InputFile Install-Office2024-KMS.ps1 ... (README, section Compilation de l'EXE)"
+    $recompiler = "RECOMPILER : Invoke-PS2EXE -InputFile Apercu-Maquette.ps1 ... (README, section Compilation de l'EXE)"
     if (-not (Test-Path -LiteralPath $exePath)) {
         Check "EXE distribue present" $false ((Split-Path $exePath -Leaf) + " absent - " + $recompiler)
     } else {
@@ -269,6 +289,9 @@ try {
         $asciiExe = [System.Text.Encoding]::ASCII.GetString($exeBytes)
         $niveau = if ($asciiExe -match 'requestedExecutionLevel[^>]*level\s*=\s*"(?<lvl>[A-Za-z]+)"') { $matches["lvl"] } else { "(absent)" }
         Check "EXE : manifeste requireAdmin" ($niveau -eq "requireAdministrator") ("requestedExecutionLevel=" + $niveau + " (attendu requireAdministrator / -RequireAdmin)" + $cons)
+        # L'EXE dessine son interface depuis le dossier Maquette et extrait le worker du
+        # moteur : les deux doivent etre livres avec lui, pas seulement presents ici.
+        Check "livraison : fenetres XAML a cote de l'EXE" (Test-Path -LiteralPath $xamlPrincipal) ("Maquette\Principal.xaml absent : l'EXE ne peut pas dessiner son interface (livrer le dossier Maquette avec l'EXE)")
     }
 
     # Mode rapide : le hook pre-commit ne doit pas couter la suite entiere.
@@ -1029,21 +1052,23 @@ public class FakeAuthProxy
         $ErrorActionPreference = $eapRapide
         $rapideCourt = ($sortieRapide -replace "\s+", " ").Trim()
         Check "hook : mode rapide -Fast operationnel" (($codeRapide -eq 0) -and $sortieRapide.Contains("RESULTAT (rapide)")) ("code=" + $codeRapide + " sortie=" + $rapideCourt)
-        Check "hook : mode rapide limite a la section 1" (($sortieRapide.Contains("=== 1. Script principal ===")) -and (-not $sortieRapide.Contains("=== 2. SourcePath"))) $rapideCourt
+        Check "hook : mode rapide limite a la section 1" (($sortieRapide.Contains("=== 1. Interface livree et proprietes de l'EXE ===")) -and (-not $sortieRapide.Contains("=== 2. SourcePath"))) $rapideCourt
 
         $depot = Join-Path $Work "hookrepo"
         $avantTest = $env:INSTALLOFFICE_HOOKTEST
         New-Item -ItemType Directory -Path $depot -Force | Out-Null
         try {
-            New-HookRepo -Path $depot -Autocrlf "false" -Dossiers @(".githooks") `
-                -Files @("Install-Office2024-KMS.ps1", "Install-Office2024-KMS.exe", "Test-InstallOffice.ps1")
-            $scriptDepot = Join-Path $depot "Install-Office2024-KMS.ps1"
+            # Le script compile est Apercu-Maquette.ps1 ; le moteur et le dossier Maquette
+            # voyagent avec lui, sans quoi la suite rapide ne peut pas juger la livraison.
+            New-HookRepo -Path $depot -Autocrlf "false" -Dossiers @(".githooks", "Maquette") `
+                -Files @("Apercu-Maquette.ps1", "Install-Office2024-KMS.ps1", "Install-Office2024-KMS.exe", "Test-InstallOffice.ps1")
+            $scriptDepot = Join-Path $depot "Apercu-Maquette.ps1"
             $headHash = (Get-FileHash -LiteralPath $scriptDepot -Algorithm SHA256).Hash
 
             # Cas A : l'index derive, l'arbre de travail est propre.
             Copy-Item -LiteralPath $scriptDepot -Destination (Join-Path $depot "_pristine.ps1") -Force
             Add-Content -LiteralPath $scriptDepot -Value "# derive indexee uniquement" -Encoding ASCII
-            $null = & git -C $depot add "Install-Office2024-KMS.ps1" 2>&1
+            $null = & git -C $depot add "Apercu-Maquette.ps1" 2>&1
             Copy-Item -LiteralPath (Join-Path $depot "_pristine.ps1") -Destination $scriptDepot -Force
             Remove-Item -LiteralPath (Join-Path $depot "_pristine.ps1") -Force
             & git -C $depot diff --quiet
@@ -1071,7 +1096,7 @@ public class FakeAuthProxy
             $vueHook = Join-Path $depot "_vue"
             New-Item -ItemType Directory -Path $vueHook -Force | Out-Null
             $null = & git -C $depot checkout-index --all --prefix="$vueHook/" 2>&1
-            $hashIndexe = (Get-FileHash -LiteralPath (Join-Path $vueHook "Install-Office2024-KMS.ps1") -Algorithm SHA256).Hash
+            $hashIndexe = (Get-FileHash -LiteralPath (Join-Path $vueHook "Apercu-Maquette.ps1") -Algorithm SHA256).Hash
             Remove-Item -LiteralPath $vueHook -Recurse -Force -ErrorAction SilentlyContinue
             Check "hook : empreinte comparee = script indexe" (($hashIndexe -ne $headHash) -and $sortieA.Contains($hashIndexe.Substring(0, 12))) ("index=" + $hashIndexe.Substring(0, 12) + " arbre=" + $headHash.Substring(0, 12) + " sortie=" + $sortieAU)
 
@@ -1080,7 +1105,7 @@ public class FakeAuthProxy
             Add-Content -LiteralPath $scriptDepot -Value "# derive non indexee" -Encoding ASCII
             $sonde = Join-Path $depot "_sonde.txt"
             $stub = @(
-                '$h = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot "Install-Office2024-KMS.ps1") -Algorithm SHA256).Hash',
+                '$h = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot "Apercu-Maquette.ps1") -Algorithm SHA256).Hash',
                 '[System.IO.File]::WriteAllText($env:HOOK_PROBE, $h)',
                 'exit 0'
             ) -join "`r`n"
@@ -1110,8 +1135,8 @@ public class FakeAuthProxy
             $ErrorActionPreference = "Continue"
             try {
                 # Script ecrit en LF avant le commit, comme dans les blobs du depot.
-                New-HookRepo -Path $depotEol -Autocrlf "true" -Dossiers @(".githooks") `
-                    -Files @("Install-Office2024-KMS.exe", "Test-InstallOffice.ps1", ".gitattributes") `
+                New-HookRepo -Path $depotEol -Autocrlf "true" -Dossiers @(".githooks", "Maquette") `
+                    -Files @("Apercu-Maquette.ps1", "Install-Office2024-KMS.exe", "Test-InstallOffice.ps1", ".gitattributes") `
                     -Avant {
                         param($p, $src)
                         $txtLf = ([System.IO.File]::ReadAllText((Join-Path $src "Install-Office2024-KMS.ps1"))) -replace "`r`n", "`n"

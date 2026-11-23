@@ -56,14 +56,14 @@ jobs:
         run: |
           git config core.autocrlf false
           git config core.eol lf
-          rm -f Install-Office2024-KMS.ps1 Test-InstallOffice.ps1 README.md
+          rm -f Apercu-Maquette.ps1 Install-Office2024-KMS.ps1 Test-InstallOffice.ps1 README.md
           git checkout -- .
 
       - name: Mesurer les fins de ligne recues
         shell: powershell
         working-directory: verif
         run: |
-          foreach ($f in @("Install-Office2024-KMS.ps1", "Test-InstallOffice.ps1")) {
+          foreach ($f in @("Apercu-Maquette.ps1", "Install-Office2024-KMS.ps1", "Test-InstallOffice.ps1")) {
             $b = [System.IO.File]::ReadAllBytes((Join-Path (Get-Location) $f))
             $cr = 0
             foreach ($x in $b) { if ($x -eq 13) { $cr++ } }
