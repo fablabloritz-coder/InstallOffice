@@ -281,7 +281,11 @@ try {
         # Autres proprietes du binaire livre : meme commande de compilation que le README.
         $vi = (Get-Item -LiteralPath $exePath).VersionInfo
         $cons = " - RECOMPILER avec Invoke-PS2EXE (README, section Compilation de l EXE)"
-        Check "EXE : version 8.2.0.0" (($vi.FileVersion -eq "8.2.0.0") -and ($vi.ProductVersion -eq "8.2.0.0")) ("FileVersion=" + $vi.FileVersion + " ProductVersion=" + $vi.ProductVersion + " (attendu 8.2.0.0 / -Version)" + $cons)
+        Check "EXE : version 8.3.0.0" (($vi.FileVersion -eq "8.3.0.0") -and ($vi.ProductVersion -eq "8.3.0.0")) ("FileVersion=" + $vi.FileVersion + " ProductVersion=" + $vi.ProductVersion + " (attendu 8.3.0.0 / -Version)" + $cons)
+        # Le badge de la fenetre annonce la version du binaire : deux sources, donc un
+        # controle. Le badge est lu dans le XAML livre, pas dans une constante du test.
+        $badge = if ($xaml -match '<TextBlock Text="([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)"\s+FontSize="11"') { $matches[1] } else { "(absent)" }
+        Check "XAML : badge de version = version de l'EXE" ($badge -eq $vi.FileVersion) ("badge=" + $badge + " EXE=" + $vi.FileVersion + " - aligner le badge de Maquette\Principal.xaml sur -Version")
         Check "EXE : titre" ($vi.FileDescription -eq "Deploiement Office 2024") ("FileDescription=" + $vi.FileDescription + " (attendu : Deploiement Office 2024 / -Title)" + $cons)
         Check "EXE : produit et societe" (($vi.ProductName -eq "InstallOffice") -and ($vi.CompanyName -eq "Lycee Loritz")) ("ProductName=" + $vi.ProductName + " CompanyName=" + $vi.CompanyName + " (attendu : InstallOffice / -Product, Lycee Loritz / -Company)" + $cons)
         Check "EXE : OriginalFilename" ($vi.OriginalFilename -eq "Install-Office2024-KMS.exe") ("OriginalFilename=" + $vi.OriginalFilename + " (attendu : Install-Office2024-KMS.exe, donc compiler directement vers ce nom)" + $cons)
@@ -292,6 +296,9 @@ try {
         # L'EXE dessine son interface depuis le dossier Maquette et extrait le worker du
         # moteur : les deux doivent etre livres avec lui, pas seulement presents ici.
         Check "livraison : fenetres XAML a cote de l'EXE" (Test-Path -LiteralPath $xamlPrincipal) ("Maquette\Principal.xaml absent : l'EXE ne peut pas dessiner son interface (livrer le dossier Maquette avec l'EXE)")
+        # Meme regle pour l'Office Deployment Tool : sans lui, le programme s'ouvre puis
+        # refuse tout deploiement. C'est ce qui manquait au ZIP telecharge.
+        Check "livraison : setup.exe a cote de l'EXE" (Test-Path -LiteralPath (Join-Path $PSScriptRoot "setup.exe")) "setup.exe absent : un dossier extrait sans l'Office Deployment Tool ne peut rien installer (livrer setup.exe avec l'EXE, README section Demarrage rapide)"
     }
 
     # Mode rapide : le hook pre-commit ne doit pas couter la suite entiere.
