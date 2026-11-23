@@ -487,7 +487,7 @@
               <TextBlock x:Name="PiedStatut" Text="Prêt à démarrer" Margin="8,0,0,0"
                          VerticalAlignment="Center"/>
             </StackPanel>
-            <TextBlock Text="Aperçu : aucune donnée n'est écrite sur le poste." FontSize="11"
+            <TextBlock Text="Hors mode capture, le déploiement est réel (administrateur requis)." FontSize="11"
                        Foreground="#8A8A8A" Margin="20,2,0,0"/>
           </StackPanel>
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"

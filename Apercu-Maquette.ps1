@@ -7,12 +7,17 @@
 #  depot de sources, XML et applications, KMS (principal, secours, cle produit),
 #  proxy (adresse, port, identifiants, exceptions).
 #
-#  Aucune ecriture sur le poste, aucune activation : cet apercu ne touche ni au
-#  moteur ni aux controles. En interactif, le pre-vol mesure reellement le poste
-#  (setup.exe, espace de C:, version de Windows) et les boutons de test ouvrent une
-#  connexion TCP de mesure vers le KMS ou le proxy. Le mode capture emploie des
-#  valeurs de reference, annoncees comme simulees dans le journal, pour que les
-#  PNG restent reproductibles au pixel.
+#  En interactif, le pre-vol mesure reellement le poste (setup.exe, espace de C:,
+#  version de Windows), les boutons de test ouvrent une connexion TCP vers le KMS ou
+#  le proxy, et le bouton "Installer Office 2024" lance le vrai deroule : le worker
+#  du moteur (Install-Office2024-KMS.ps1) est extrait par analyse syntaxique et
+#  execute tel quel, sans passer par son interface WinForms. Un deploiement reel
+#  demande les droits administrateur et refuse de partir si le pre-vol n'a pas
+#  mesure un poste pret.
+#
+#  En capture, rien n'est deploye : le scenario simule fournit les valeurs de
+#  reference, annoncees comme simulees dans le journal, pour que les PNG restent
+#  reproductibles au pixel.
 #
 #  Usage :
 #    powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Apercu-Maquette.ps1
@@ -61,6 +66,10 @@ $dossier  = Join-Path $ici "Maquette"
 $pinceaux = New-Object System.Windows.Media.BrushConverter
 $policeTexte = New-Object System.Windows.Media.FontFamily("Segoe UI Variable Text, Segoe UI")
 $policeIcone = New-Object System.Windows.Media.FontFamily("Segoe MDL2 Assets, Segoe UI")
+
+# Exclusions par defaut : celles qu'annonce deja l'ecran (Teams, OneDrive, Skype).
+# Ce sont les identifiants ODT, ceux que le moteur ecrit dans le XML.
+$script:appsExclues = @("Teams", "OneDrive", "Lync")
 
 $APPS = @(
     @{ Nom = "Word" ; Cle = "AppWord" ; Libelle = "Word" }
@@ -272,6 +281,288 @@ function Update-PreVol {
     } else {
         Add-Journal $Fenetre "err" ("Test TCP du KMS " + $c.Kms.Cible.Hote + ":" + $c.Kms.Cible.Port + " : injoignable (" + $c.Kms.Test.Motif + ").")
     }
+    # Les mesures sont rendues a l'appelant : le bouton Installer refuse de partir sur
+    # autre chose que ce qui vient d'etre constate.
+    return $c
+}
+
+# --- Deploiement reel : le worker du moteur existant ------------------------
+# Le moteur tient ses cinq etapes dans un scriptblock autonome ($script:BgDoWorkHandler)
+# qui ne parle a son interface que par une table synchronisee. On l'extrait ici par
+# analyse syntaxique, sans executer le moteur : c'est le meme code qui tourne, pas une
+# reecriture. L'ancienne interface reste intacte jusqu'a ce que ce portage soit verifie.
+$cheminMoteur = Join-Path $ici "Install-Office2024-KMS.ps1"
+$script:deploiement = $null
+$script:pompeMoteur = $null
+$script:derniersFaits = @()
+
+function Get-ScriptblockMoteur {
+    # Le scriptblock de deploiement, extrait de la source du moteur. Une source qui
+    # aurait change de forme s'arrete ici en le disant, plutot que de lancer autre chose.
+    param([string]$Chemin)
+    if (-not (Test-Path -LiteralPath $Chemin)) { throw ("Moteur introuvable : " + $Chemin) }
+    $jetons = $null ; $erreurs = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($Chemin, [ref]$jetons, [ref]$erreurs)
+    $trouves = @($ast.FindAll({
+        param($n)
+        ($n -is [System.Management.Automation.Language.AssignmentStatementAst]) -and
+        ($n.Left.Extent.Text -eq '$script:BgDoWorkHandler')
+    }, $true))
+    if ($trouves.Count -ne 1) {
+        throw ("Moteur : " + $trouves.Count + " affectation(s) de BgDoWorkHandler trouvee(s) dans " + $Chemin + ", une seule est attendue.")
+    }
+    # La valeur est une expression (CommandExpressionAst) autour du scriptblock.
+    $droite = $trouves[0].Right
+    if ($droite -is [System.Management.Automation.Language.CommandExpressionAst]) { $droite = $droite.Expression }
+    if (-not ($droite -is [System.Management.Automation.Language.ScriptBlockExpressionAst])) {
+        throw ("Moteur : BgDoWorkHandler n'est plus un scriptblock dans " + $Chemin + ".")
+    }
+    # Corps seul : [scriptblock]::Create recevrait sinon une accolade qui ne fait que
+    # rendre un scriptblock imbrique, sans jamais executer le worker.
+    $t = $droite.Extent.Text.Trim()
+    if ($t.StartsWith("{") -and $t.EndsWith("}")) { $t = $t.Substring(1, $t.Length - 2) }
+    return $t
+}
+
+function Get-ConstanteMoteur {
+    # Constante du moteur lue dans sa source (LOG_FOLDER...), pour ne pas la recopier.
+    param([string]$Chemin, [string]$Nom, [string]$Defaut)
+    if (Test-Path -LiteralPath $Chemin) {
+        foreach ($l in [System.IO.File]::ReadAllLines($Chemin)) {
+            if ($l -match ('^\$' + $Nom + '\s*=\s*"([^"]+)"')) { return $Matches[1] }
+        }
+    }
+    return $Defaut
+}
+
+function Get-ConfigDeploiement {
+    # Traduit les champs de l'ecran en l'objet que le worker du moteur attend.
+    param($Fenetre, $Sync, [string]$CheminMoteur)
+    $dossier = Get-ConstanteMoteur $CheminMoteur "LOG_FOLDER" "C:\InstallOffice2024"
+    $kms   = Split-HotePort $Fenetre.FindName("ChampKms").Text 1688
+    $depot = [bool]$Fenetre.FindName("ChkDepot").IsChecked
+    $proxy = (-not $depot) -and [bool]$Fenetre.FindName("ChkProxy").IsChecked
+    $xml   = Join-Path $dossier "OfficeConfig2024.xml"
+    return [pscustomobject]@{
+        SyncHash        = $Sync
+        ActivateOnly    = $false
+        SetupExePath    = $Fenetre.FindName("ChampSetup").Text.Trim()
+        InstallFolder   = $dossier
+        XMLPath         = $xml
+        ActualXMLPath   = $xml
+        UseCustomXML    = [bool]$Fenetre.FindName("RadXmlFichier").IsChecked
+        CustomXMLPath   = $Fenetre.FindName("ChampXml").Text.Trim()
+        ExcludedApps    = @($script:appsExclues)
+        LanguageID      = $Fenetre.FindName("LangueTexte").Text
+        RemoveOld       = [bool]$Fenetre.FindName("ChkRemoveOld").IsChecked
+        DoInstall       = [bool]$Fenetre.FindName("ChkInstall").IsChecked
+        DoActivate      = [bool]$Fenetre.FindName("ChkKms").IsChecked
+        KmsHost         = $(if ($null -ne $kms) { $kms.Hote } else { "" })
+        KmsPort         = $(if ($null -ne $kms) { [string]$kms.Port } else { "1688" })
+        KmsSecondary    = $Fenetre.FindName("ChampKmsSecours").Text.Trim()
+        ProxyEnabled    = $proxy
+        ProxyHost       = $Fenetre.FindName("ChampProxy").Text.Trim()
+        ProxyPort       = $Fenetre.FindName("ChampPort").Text.Trim()
+        ProxyRelay      = $false
+        ProxyRelayTarget = ""
+        ProxyBypass     = $Fenetre.FindName("ChampBypass").Text.Trim()
+        DepotEnabled    = $depot
+        DepotPath       = $Fenetre.FindName("ChampDepot").Text.Trim()
+        SourcePath      = $dossier
+        LocalDataPath   = $dossier
+        DepotCopy       = $false
+        ApplyProductKey = [bool]$Fenetre.FindName("ChkCle").IsChecked
+        ProductKey      = $Fenetre.FindName("ChampCle").Text.Trim()
+        DiskMinGB       = 4
+    }
+}
+
+function Write-LigneMoteur {
+    # Une ligne du worker, ramenee au journal de l'ecran : le worker ecrit
+    # "[HH:mm:ss] [OK]  texte", l'horodatage et le niveau sont donc relus ici.
+    param($Fenetre, [string]$Texte)
+    $niveau = "info"
+    $t = $Texte
+    if ($t -match '^\[\d\d:\d\d:\d\d\]') { $t = $t.Substring($Matches[0].Length) }
+    if ($t -match '^\s*\[OK\]\s*')  { $niveau = "ok"  ; $t = $t -replace '^\s*\[OK\]\s*', '' }
+    elseif ($t -match '^\s*\[ERR\]\s*') { $niveau = "err" ; $t = $t -replace '^\s*\[ERR\]\s*', '' }
+    elseif ($t -match '^\s*\[!\]\s*')   { $niveau = "avr" ; $t = $t -replace '^\s*\[!\]\s*', '' }
+    elseif ($t -match '^---\s*')        { $niveau = "etape" ; $t = $t -replace '^---\s*', '' }
+    $t = $t.Trim()
+    Add-Journal $Fenetre $niveau $t
+    # Points de controle : les trois derniers faits constates de l'etape en cours.
+    # Le vert marque un fait reussi, le rouge un echec, le gris une simple information.
+    if ($niveau -ne "etape" -and $t -ne "") {
+        $court = if ($t.Length -gt 42) { $t.Substring(0, 39) + "..." } else { $t }
+        $etat = switch ($niveau) { "ok" { "ok" } "err" { "erreur" } default { "attente" } }
+        $script:derniersFaits += ($etat + "|" + $court)
+        if ($script:derniersFaits.Count -gt 3) { $script:derniersFaits = @($script:derniersFaits[-3..-1]) }
+        Set-PointsEtape $Fenetre $script:derniersFaits
+    }
+}
+
+function Stop-PompeMoteur {
+    param($Fenetre)
+    if ($null -ne $script:pompeMoteur) { $script:pompeMoteur.Stop() ; $script:pompeMoteur = $null }
+    if ($null -ne $script:deploiement) {
+        try { $script:deploiement.PS.Dispose() } catch { }
+        try { $script:deploiement.Runspace.Close() ; $script:deploiement.Runspace.Dispose() } catch { }
+        $script:deploiement = $null
+    }
+    if ($null -ne $Fenetre) { $Fenetre.FindName("BtnInstaller").IsEnabled = $true }
+    Set-Activite $Fenetre $false
+}
+
+function Start-Deploiement {
+    # Lance le worker du moteur, si et seulement si le pre-vol vient de mesurer un poste
+    # pret : rien ne part sur une valeur supposee.
+    param($Fenetre, [string]$CheminMoteur)
+    if ($null -ne $script:deploiement) { Add-Journal $Fenetre "avr" "Un deploiement est deja en cours." ; return }
+
+    $c = Update-PreVol $Fenetre
+    $refus = @()
+    if (-not $c.SetupPresent) { $refus += ("setup.exe absent : " + $c.Setup) }
+    if (-not $c.Admin) { $refus += "droits administrateur absents" }
+    if (-not $c.AssezDEspace) { $refus += ($c.LibreGo.ToString([System.Globalization.CultureInfo]::InvariantCulture) + " Go libres, 4 Go requis") }
+    if (-not $c.Os.Ok) { $refus += "Windows 10+ requis" }
+    $depot = [bool]$Fenetre.FindName("ChkDepot").IsChecked
+    $proxy = (-not $depot) -and [bool]$Fenetre.FindName("ChkProxy").IsChecked
+    if ($proxy -and $Fenetre.FindName("ChampProxyUser").Text.Trim() -ne "") {
+        $refus += "proxy authentifie : le relais local n'est pas encore porte (etape 2)"
+    }
+    if ([bool]$Fenetre.FindName("RadXmlFichier").IsChecked -and $Fenetre.FindName("ChampXml").Text.Trim() -eq "") {
+        $refus += "fichier XML choisi mais chemin vide"
+    }
+    if ($refus.Count -gt 0) {
+        Add-Journal $Fenetre "err" ("Deploiement refuse : " + ($refus -join " ; ") + ".")
+        $Fenetre.FindName("StatutTexte").Text = "Deploiement refuse"
+        $Fenetre.FindName("StatutDetail").Text = "Pre-vol non conforme"
+        $Fenetre.FindName("PiedStatut").Text = "Deploiement refuse"
+        return
+    }
+    if ($null -ne $c.Kms -and -not $c.Kms.Test.Ok) {
+        Add-Journal $Fenetre "avr" ("KMS " + $c.Kms.Cible.Hote + ":" + $c.Kms.Cible.Port + " injoignable (" + $c.Kms.Test.Motif + ") : l'activation echouera sans lui.")
+    }
+
+    $sync = [hashtable]::Synchronized(@{
+        LogQueue      = New-Object System.Collections.Concurrent.ConcurrentQueue[object]
+        StepState     = [string[]]@("waiting","waiting","waiting","waiting","waiting")
+        ActiveStep    = -1
+        StatusText    = "Pret."
+        Done          = $false
+        HasError      = $false
+        FinalMsg      = ""
+        StartTime     = (Get-Date)
+        StepStartTime = $null
+        PopupTitle    = ""
+        PopupMsg      = ""
+        PopupIcon     = "Information"
+        ShowPopup     = $false
+    })
+
+    $rs = $null ; $ps = $null
+    try {
+        $texte = Get-ScriptblockMoteur $CheminMoteur
+        $cfg = Get-ConfigDeploiement $Fenetre $sync $CheminMoteur
+        $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+        $rs.Open()
+        $rs.SessionStateProxy.SetVariable("cfg", $cfg)
+        $rs.SessionStateProxy.SetVariable("workerText", $texte)
+        $ps = [System.Management.Automation.PowerShell]::Create()
+        $ps.Runspace = $rs
+        [void]$ps.AddScript({
+            Add-Type -AssemblyName System.Drawing
+            $worker = [scriptblock]::Create($workerText)
+            $e = [System.ComponentModel.DoWorkEventArgs]::new($cfg)
+            & $worker $null $e
+        })
+        $handle = $ps.BeginInvoke()
+    } catch {
+        # Rien n'a demarre : on referme ce qui a pu s'ouvrir avant de le dire.
+        if ($null -ne $ps) { try { $ps.Dispose() } catch { } }
+        if ($null -ne $rs) { try { $rs.Close() ; $rs.Dispose() } catch { } }
+        Add-Journal $Fenetre "err" ("Deploiement impossible : " + $_.Exception.Message)
+        return
+    }
+
+    $script:derniersFaits = @()
+    $script:deploiement = @{ PS = $ps ; Runspace = $rs ; Sync = $sync ; Handle = $handle ; Etats = @("","","","","") ; Fin = $false ; Pourcent = -1 ; Actif = $true }
+    $Fenetre.FindName("Journal").Children.Clear()
+    Reset-Scene $Fenetre
+    $Fenetre.FindName("BtnInstaller").IsEnabled = $false
+    Set-Activite $Fenetre $true
+    Add-Journal $Fenetre "info" "Deploiement lance : worker du moteur, cinq etapes."
+
+    $script:pompeMoteur = New-Object System.Windows.Threading.DispatcherTimer
+    $script:pompeMoteur.Interval = [TimeSpan]::FromMilliseconds(150)
+    $script:pompeMoteur.Add_Tick({
+        $fen = $script:fenetre
+        $d = $script:deploiement
+        if ($null -eq $fen -or $null -eq $d) { return }
+        $sync = $d.Sync
+
+        $entree = $null ; $n = 0
+        while ($sync.LogQueue.TryDequeue([ref]$entree) -and $n -lt 40) { Write-LigneMoteur $fen $entree.Text ; $n++ }
+
+        $libelles = @{ waiting = "attente" ; running = "encours" ; done = "termine" ; error = "erreur" ; skipped = "saute" }
+        $faits = 0 ; $actif = $false
+        for ($i = 0; $i -lt 5; $i++) {
+            $etat = [string]$sync.StepState[$i]
+            if ($etat -ne $d.Etats[$i]) {
+                Set-Etape $fen ($i + 1) $libelles[$etat]
+                $d.Etats[$i] = $etat
+                if ($etat -eq "running") { $script:derniersFaits = @() ; Set-PointsEtape $fen @() }
+            }
+            if ($etat -eq "running") { $actif = $true }
+            # Une etape en erreur n'est pas une etape faite : elle ne compte pas dans la jauge.
+            if ($etat -eq "done" -or $etat -eq "skipped") { $faits++ }
+        }
+        # Une seule bascule par changement : relancer la minuterie a chaque battement
+        # remettrait la bande et l'anneau sur place.
+        if ($actif -ne $d.Actif) { $d.Actif = $actif ; Set-Activite $fen $actif }
+
+        $pct = [int](100 * $faits / 5)
+        if ($sync.Done -and -not $sync.HasError) { $pct = 100 }
+        if ($pct -ne $d.Pourcent) {
+            $d.Pourcent = $pct
+            $fen.FindName("Jauge").Value = $pct
+            $fen.FindName("EtapePourcent").Text = ("{0} %" -f $pct)
+        }
+        if ($sync.StatusText) {
+            $fen.FindName("StatutTexte").Text = [string]$sync.StatusText
+            $fen.FindName("PiedStatut").Text = [string]$sync.StatusText
+        }
+        $fen.FindName("StatutDetail").Text = if ([int]$sync.ActiveStep -ge 0) { "Etape " + ([int]$sync.ActiveStep + 1) + " sur 5" } else { ($faits.ToString() + " etapes sur 5") }
+
+        if ($sync.ShowPopup) {
+            Add-Journal $fen "avr" (([string]$sync.PopupTitle) + " : " + ([string]$sync.PopupMsg))
+            $sync.ShowPopup = $false
+        }
+
+        if (-not $sync.Done -and $d.Handle.IsCompleted) {
+            $sync.HasError = $true
+            $sync.FinalMsg = "Worker interrompu sans message."
+            $sync.Done = $true
+        }
+        if ($sync.Done -and -not $d.Fin) {
+            $d.Fin = $true
+            if ($sync.HasError) {
+                $final = [string]$sync.FinalMsg
+                if ($final -eq "") { $final = "Deploiement interrompu sans message du moteur." }
+                Add-Journal $fen "err" $final
+                $fen.FindName("StatutTexte").Text = "Echec"
+                $fen.FindName("PiedStatut").Text = "Echec"
+            } else {
+                if ([string]$sync.FinalMsg -ne "") { Add-Journal $fen "ok" ([string]$sync.FinalMsg) }
+                $fen.FindName("StatutTexte").Text = "Deploiement termine"
+                $fen.FindName("PiedStatut").Text = "Deploiement termine"
+                $fen.FindName("Jauge").Value = 100
+                $fen.FindName("EtapePourcent").Text = "100 %"
+            }
+            Stop-PompeMoteur $fen
+        }
+    })
+    $script:pompeMoteur.Start()
 }
 
 # --- Animations : seulement en interactif ----------------------------------
@@ -545,7 +836,7 @@ function Get-ApplicationsExclues {
     param($Dlg)
     $exclues = @()
     foreach ($a in $APPS) {
-        if (-not $Dlg.FindName($a.Cle).IsChecked) { $exclues += $a.Libelle }
+        if (-not $Dlg.FindName($a.Cle).IsChecked) { $exclues += $a.Nom }
     }
     return $exclues
 }
@@ -564,7 +855,10 @@ function Show-Applications {
     & $maj
     $dlg.FindName("BtnAppliquer").Add_Click({
         $exclues = @(Get-ApplicationsExclues $script:dlgApps)
-        $texte = if ($exclues.Count -eq 0) { "Toutes les applications incluses" } else { "Exclues : " + ($exclues -join ", ") }
+        # Les identifiants ODT pilotent le XML ; l'etiquette, elle, montre les libelles.
+        $script:appsExclues = $exclues
+        $libelles = @($APPS | Where-Object { $exclues -contains $_.Nom } | ForEach-Object { $_.Libelle })
+        $texte = if ($exclues.Count -eq 0) { "Toutes les applications incluses" } else { "Exclues : " + ($libelles -join ", ") }
         $script:fenetre.FindName("LblApps").Text = $texte
         Add-Journal $script:fenetre "info" ("Applications retenues - " + $(if ($exclues.Count -eq 0) { "aucune exclusion" } else { "exclues : " + ($exclues -join ", ") }))
         $script:dlgApps.DialogResult = $true
@@ -826,20 +1120,9 @@ $win.FindName("BtnTestProxy").Add_Click({
 # lignes et deux connexions.
 $win.FindName("BtnTestKms").Add_Click({ Update-PreVol $win })
 
-$script:i = 0
-$script:minuterie = New-Object System.Windows.Threading.DispatcherTimer
-$script:minuterie.Interval = [TimeSpan]::FromMilliseconds(1300)
-$script:minuterie.Add_Tick({
-    Set-Scene $script:fenetre $script:i
-    $script:i++
-    if ($script:i -ge $scenario.Count) { $script:minuterie.Stop() ; Set-Activite $script:fenetre $false }
-})
-$win.FindName("BtnInstaller").Add_Click({
-    $script:fenetre.FindName("Journal").Children.Clear()
-    Reset-Scene $script:fenetre
-    $script:i = 0
-    $script:minuterie.Start()
-})
+# Le bouton lance le worker du moteur. Le scenario simule ne sert plus qu'aux
+# captures : l'interactif deploye pour de vrai, ou refuse en nommant ce qui manque.
+$win.FindName("BtnInstaller").Add_Click({ Start-Deploiement $win $cheminMoteur })
 
 if ($Dialogue) { Show-Reliquat $win }
 if ($Applications) { Show-Applications $win }
