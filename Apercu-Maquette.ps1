@@ -15,6 +15,13 @@
 #  demande les droits administrateur et refuse de partir si le pre-vol n'a pas
 #  mesure un poste pret.
 #
+#  Le reste de l'ecran suit le moteur : reglages relus et reecrits dans le meme
+#  fichier (%APPDATA%\Office2024Deploy\config.json, mot de passe et cle produit
+#  chiffres DPAPI), proxy authentifie servi par le relais loopback, reliquat de
+#  relais cherche au demarrage sur le seul port que ce programme a enregistre,
+#  "Activer seulement" pour rejouer l'activation sans installation, et export du
+#  journal.
+#
 #  En capture, rien n'est deploye : le scenario simule fournit les valeurs de
 #  reference, annoncees comme simulees dans le journal, pour que les PNG restent
 #  reproductibles au pixel.
@@ -304,6 +311,160 @@ $cheminMoteur = Join-Path $ici "Install-Office2024-KMS.ps1"
 $script:deploiement = $null
 $script:pompeMoteur = $null
 $script:derniersFaits = @()
+# --- Relais, reliquat et configuration : le code du moteur ------------------
+#  Ces fonctions ne dependent pas de WinForms : elles sont reprises telles quelles
+#  par analyse syntaxique, comme le worker. Une seule implementation du relais, du
+#  marqueur de port, de la detection de reliquat et du chiffrement DPAPI, donc un
+#  seul comportement a verifier.
+function Get-DefinitionsMoteur {
+    # Definitions extraites de la source du moteur, sans l'executer. L'appelant les
+    # evalue dans sa propre portee : une fonction renommee s'arrete ici en la nommant
+    # plutot que de laisser l'ecran improviser.
+    param([string]$Chemin, [string[]]$Noms)
+    if (-not (Test-Path -LiteralPath $Chemin)) { throw ("Moteur introuvable : " + $Chemin) }
+    $jetons = $null ; $erreurs = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($Chemin, [ref]$jetons, [ref]$erreurs)
+    $defs = @{}
+    foreach ($d in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+        if (($Noms -contains $d.Name) -and -not $defs.ContainsKey($d.Name)) { $defs[$d.Name] = $d.Extent.Text }
+    }
+    $absents = @($Noms | Where-Object { -not $defs.ContainsKey($_) })
+    if ($absents.Count -gt 0) {
+        throw ("Moteur : fonction(s) introuvable(s) dans " + $Chemin + " : " + ($absents -join ", ") + ".")
+    }
+    return (@($Noms | ForEach-Object { $defs[$_] }) -join "`r`n`r`n")
+}
+
+# --- Configuration du poste et journal --------------------------------------
+function Save-ConfigPoste {
+    # Meme fichier et meme chiffrement que le moteur : les deux interfaces partagent
+    # les reglages du poste.
+    param($Fenetre, $Cfg)
+    Save-Config ([pscustomobject]@{
+            SetupExePath       = $Fenetre.FindName("ChampSetup").Text.Trim()
+            KmsServer          = $Fenetre.FindName("ChampKms").Text.Trim()
+            Language           = $Fenetre.FindName("LangueTexte").Text
+            RemoveOld          = $Cfg.RemoveOld
+            AutoInstall        = $Cfg.DoInstall
+            AutoActivate       = $Cfg.DoActivate
+            ExcludedApps       = @($script:appsExclues)
+            UseCustomXML       = $Cfg.UseCustomXML
+            CustomXMLPath      = $Cfg.CustomXMLPath
+            ProxyEnabled       = $Cfg.ProxyEnabled
+            ProxyHost          = $Fenetre.FindName("ChampProxy").Text.Trim()
+            ProxyPort          = $Fenetre.FindName("ChampPort").Text.Trim()
+            ProxyBypass        = $Fenetre.FindName("ChampBypass").Text.Trim()
+            ProxyUser          = $Fenetre.FindName("ChampProxyUser").Text.Trim()
+            DepotEnabled       = $Cfg.DepotEnabled
+            DepotPath          = $Fenetre.FindName("ChampDepot").Text.Trim()
+            KmsSecondaryServer = $Fenetre.FindName("ChampKmsSecours").Text.Trim()
+            ApplyProductKey    = $Cfg.ApplyProductKey
+            ProductKeyEnc      = (Protect-SecretText $Cfg.ProductKey)
+            SavedAt            = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+    })
+}
+
+function Import-ConfigPoste {
+    param($Fenetre)
+    $s = Get-Config
+    if ($null -eq $s) { return }
+    if ($s.SetupExePath) { $Fenetre.FindName("ChampSetup").Text = [string]$s.SetupExePath }
+    if ($s.KmsServer) { $Fenetre.FindName("ChampKms").Text = [string]$s.KmsServer }
+    if ($s.Language) { $Fenetre.FindName("LangueTexte").Text = [string]$s.Language }
+    if ($null -ne $s.RemoveOld) { $Fenetre.FindName("ChkRemoveOld").IsChecked = [bool]$s.RemoveOld }
+    if ($null -ne $s.AutoInstall) { $Fenetre.FindName("ChkInstall").IsChecked = [bool]$s.AutoInstall }
+    if ($null -ne $s.AutoActivate) { $Fenetre.FindName("ChkKms").IsChecked = [bool]$s.AutoActivate }
+    if ($s.ExcludedApps) { $script:appsExclues = @($s.ExcludedApps) ; Update-LibelleApps $Fenetre }
+    if ([bool]$s.UseCustomXML) {
+        $Fenetre.FindName("RadXmlFichier").IsChecked = $true
+        if ($s.CustomXMLPath) { $Fenetre.FindName("ChampXml").Text = [string]$s.CustomXMLPath }
+    }
+    if ($null -ne $s.ProxyEnabled) { $Fenetre.FindName("ChkProxy").IsChecked = [bool]$s.ProxyEnabled }
+    if ($s.ProxyHost) { $Fenetre.FindName("ChampProxy").Text = [string]$s.ProxyHost }
+    if ($s.ProxyPort) { $Fenetre.FindName("ChampPort").Text = [string]$s.ProxyPort }
+    if ($s.ProxyBypass) { $Fenetre.FindName("ChampBypass").Text = [string]$s.ProxyBypass }
+    if ($s.ProxyUser) { $Fenetre.FindName("ChampProxyUser").Text = [string]$s.ProxyUser }
+    if ($null -ne $s.DepotEnabled) { $Fenetre.FindName("ChkDepot").IsChecked = [bool]$s.DepotEnabled }
+    if ($s.DepotPath) { $Fenetre.FindName("ChampDepot").Text = [string]$s.DepotPath }
+    if ($s.KmsSecondaryServer) { $Fenetre.FindName("ChampKmsSecours").Text = [string]$s.KmsSecondaryServer }
+    if ($null -ne $s.ApplyProductKey) { $Fenetre.FindName("ChkCle").IsChecked = [bool]$s.ApplyProductKey }
+    if ($s.ProductKeyEnc) { $Fenetre.FindName("ChampCle").Text = Unprotect-SecretText ([string]$s.ProductKeyEnc) }
+    Update-Options $Fenetre
+    Add-Journal $Fenetre "info" ("Reglages restaures depuis " + $CONFIG_FILE)
+}
+
+function Get-JournalTexte {
+    param($Fenetre)
+    $lignes = @()
+    foreach ($l in $Fenetre.FindName("Journal").Children) { if ($null -ne $l) { $lignes += [string]$l.Text } }
+    return ($lignes -join "`r`n")
+}
+
+function Save-Journal {
+    # Meme emplacement que le moteur : le journal du deploiement survit a la fenetre.
+    param($Fenetre)
+    try {
+        $dossier = $LOG_FOLDER
+        if (-not (Test-Path -LiteralPath $dossier)) { New-Item -ItemType Directory -Path $dossier -Force | Out-Null }
+        $fichier = Join-Path $dossier ("deploy_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".log")
+        Set-Content -LiteralPath $fichier -Value (Get-JournalTexte $Fenetre) -Encoding UTF8
+        return $fichier
+    } catch { return "" }
+}
+
+function Export-Journal {
+    param($Fenetre)
+    $dlg = New-Object Microsoft.Win32.SaveFileDialog
+    $dlg.Title = "Exporter le journal"
+    $dlg.Filter = "Texte (*.txt)|*.txt|Tous les fichiers (*.*)|*.*"
+    $dlg.FileName = "Office2024_log_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".txt"
+    if ($dlg.ShowDialog()) {
+        try {
+            Set-Content -LiteralPath $dlg.FileName -Value (Get-JournalTexte $Fenetre) -Encoding UTF8
+            Add-Journal $Fenetre "ok" ("Journal exporte : " + $dlg.FileName)
+        } catch {
+            Add-Journal $Fenetre "err" ("Export impossible : " + $_.Exception.Message)
+        }
+    }
+}
+
+function Show-ConfirmationDeploiement {
+    # Recapitulatif avant un acte irreversible : ce qui va tourner, sur quoi et ou.
+    param($Cfg)
+    $kms = if ($Cfg.KmsHost -ne "") { $Cfg.KmsHost + ":" + $Cfg.KmsPort } else { "non renseigne" }
+    if ($Cfg.ActivateOnly) {
+        $msg = "MODE : ACTIVATION KMS UNIQUEMENT`n" + ("=" * 44) + "`n"
+        $msg += "  Poste       : " + $env:COMPUTERNAME + "`n"
+        $msg += "  Utilisateur : " + $env:USERNAME + "`n`n"
+        $msg += "  Serveur KMS : " + $kms + "`n"
+        if ($Cfg.ApplyProductKey) { $msg += "  Cle produit : appliquee avant activation`n" }
+        $msg += "`n  Confirmer ?"
+    } else {
+        $total = 0
+        $msg = "MODE : DEPLOIEMENT COMPLET`n" + ("=" * 44) + "`n"
+        $msg += "  Poste       : " + $env:COMPUTERNAME + "`n"
+        $msg += "  Utilisateur : " + $env:USERNAME + "`n`n"
+        $msg += "  Actions prevues :`n"
+        if ($Cfg.RemoveOld) { $msg += "    [x] Desinstallation ancienne version  (~3 min)`n" ; $total += 3 }
+        else { $msg += "    [ ] Desinstallation (ignoree)`n" }
+        if ($Cfg.DepotEnabled) {
+            $msg += "    [x] Sources locales (depot) : aucun telechargement`n" ; $total += 2
+            $msg += "        depot : " + $Cfg.DepotPath + "`n"
+        } else {
+            $msg += "    [x] Telechargement Office 2024 (" + $Cfg.LanguageID + ")  (~18 min)`n" ; $total += 18
+            if ($Cfg.ProxyEnabled) { $msg += "        via proxy " + $Cfg.ProxyHost + ":" + $Cfg.ProxyPort + " (applique au niveau systeme)`n" }
+        }
+        if ($Cfg.DoInstall) { $msg += "    [x] Installation silencieuse  (~12 min)`n" ; $total += 12 }
+        else { $msg += "    [ ] Installation (differee)`n" }
+        if ($Cfg.DoInstall -and $Cfg.DoActivate) { $msg += "    [x] Activation KMS : " + $kms + "`n" ; $total += 1 }
+        else { $msg += "    [ ] Activation KMS (ignoree)`n" }
+        if ($Cfg.DoInstall -and $Cfg.DoActivate -and $Cfg.ApplyProductKey) { $msg += "    [x] Cle produit appliquee avant activation`n" }
+        $msg += "`n  Estimation totale : ~" + $total + " minutes`n`n  Lancer le deploiement ?"
+    }
+    $r = [System.Windows.MessageBox]::Show($msg, "Confirmation du deploiement",
+            [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Question)
+    return ($r -eq [System.Windows.MessageBoxResult]::Yes)
+}
 
 function Get-ScriptblockMoteur {
     # Le scriptblock de deploiement, extrait de la source du moteur. Une source qui
@@ -352,13 +513,13 @@ function Get-ConfigDeploiement {
     # Traduit les champs de l'ecran en l'objet que le worker du moteur attend. Les deux
     # valeurs mesurees par le pre-vol (setup.exe, adresse KMS) sont reprises telles
     # quelles : le worker recoit ce qui vient d'etre constate, pas une seconde lecture.
-    param($Fenetre, $Sync, [string]$CheminMoteur, $PreVol)
-    $dossier = Get-ConstanteMoteur $CheminMoteur "LOG_FOLDER"
+    param($Fenetre, $Sync, $PreVol, [bool]$ActiverSeul)
+    $dossier = $LOG_FOLDER
     $mode = Get-SourceMode $Fenetre
     $xml = Join-Path $dossier "OfficeConfig2024.xml"
     return [pscustomobject]@{
         SyncHash        = $Sync
-        ActivateOnly    = $false
+        ActivateOnly    = $ActiverSeul
         SetupExePath    = $PreVol.Setup
         InstallFolder   = $dossier
         ActualXMLPath   = $xml
@@ -426,14 +587,21 @@ function Stop-PompeMoteur {
         try { $script:deploiement.Runspace.Close() ; $script:deploiement.Runspace.Dispose() } catch { }
         $script:deploiement = $null
     }
+    # Le relais n'a plus lieu d'ecouter. Le worker a restaure la configuration avant de
+    # rendre la main : le marqueur ne sert donc plus que si une couche pointe encore
+    # dessus, auquel cas il reste pour le prochain demarrage.
+    Stop-ProxyRelay
+    Clear-RelayPortIfRestored
     $Fenetre.FindName("BtnInstaller").IsEnabled = $true
+    $Fenetre.FindName("BtnActiver").IsEnabled = $true
     Set-Activite $Fenetre $false
 }
 
 function Start-Deploiement {
     # Lance le worker du moteur, si et seulement si le pre-vol vient de mesurer un poste
-    # pret : rien ne part sur une valeur supposee.
-    param($Fenetre, [string]$CheminMoteur)
+    # pret : rien ne part sur une valeur supposee. -ActiverSeul fait sauter au worker
+    # ses etapes 1 a 4 : ni setup.exe, ni espace disque, ni Windows ne sont exiges.
+    param($Fenetre, [string]$CheminMoteur, [switch]$ActiverSeul)
     if ($null -ne $script:deploiement) { Add-Journal $Fenetre "avr" "Un deploiement est deja en cours." ; return }
 
     $c = Update-PreVol $Fenetre
@@ -455,24 +623,48 @@ function Start-Deploiement {
     $rs = $null ; $ps = $null
     try {
         $texte = Get-ScriptblockMoteur $CheminMoteur
-        $cfg = Get-ConfigDeploiement $Fenetre $sync $CheminMoteur $c
+        $cfg = Get-ConfigDeploiement $Fenetre $sync $c $ActiverSeul.IsPresent
 
         # Les refus portent sur la configuration qui part reellement : setup.exe et
-        # l'adresse KMS sont celles que le pre-vol vient de constater.
+        # l'adresse KMS sont celles que le pre-vol vient de constater. Une activation
+        # seule ne passe ni par setup.exe, ni par un telechargement, ni par une
+        # installation : ces exigences ne la concernent pas.
         $refus = @()
-        if (-not $c.SetupPresent) { $refus += ("setup.exe absent : " + $c.Setup) }
-        if (-not $c.Admin) { $refus += "droits administrateur absents" }
-        if (-not $c.AssezDEspace) { $refus += ($c.LibreGo.ToString([System.Globalization.CultureInfo]::InvariantCulture) + " Go libres, " + $script:disqueMinGo + " Go requis") }
-        if (-not $c.Os.Ok) { $refus += "Windows 10+ requis" }
-        if ($cfg.ProxyEnabled -and $Fenetre.FindName("ChampProxyUser").Text.Trim() -ne "") {
-            $refus += "proxy authentifie : le relais local n'est pas encore porte (etape 2)"
+        if (-not $cfg.ActivateOnly) {
+            if (-not $c.SetupPresent) { $refus += ("setup.exe absent : " + $c.Setup) }
+            if (-not $c.AssezDEspace) { $refus += ($c.LibreGo.ToString([System.Globalization.CultureInfo]::InvariantCulture) + " Go libres, " + $script:disqueMinGo + " Go requis") }
+            if (-not $c.Os.Ok) { $refus += "Windows 10+ requis" }
         }
+        if (-not $c.Admin) { $refus += "droits administrateur absents" }
+        if ($cfg.DoActivate -and $cfg.KmsHost -eq "") { $refus += "activation KMS demandee sans adresse de serveur" }
         if ($cfg.UseCustomXML -and $cfg.CustomXMLPath -eq "") { $refus += "fichier XML choisi mais chemin vide" }
         if ($refus.Count -gt 0) {
             Add-Journal $Fenetre "err" ("Deploiement refuse : " + ($refus -join " ; ") + ".")
             $Fenetre.FindName("StatutTexte").Text = "Deploiement refuse"
             $Fenetre.FindName("StatutDetail").Text = "Pre-vol non conforme"
             $Fenetre.FindName("PiedStatut").Text = "Deploiement refuse"
+            return
+        }
+
+        # Proxy authentifie : relais loopback, seul moyen d'ajouter l'authentification
+        # pour le service Click-to-Run, qui tourne en LocalSystem. Le mot de passe ne
+        # quitte pas la memoire du processus et n'est jamais enregistre.
+        if ($cfg.ProxyEnabled -and $Fenetre.FindName("ChampProxyUser").Text.Trim() -ne "") {
+            $relais = Start-AuthenticatedProxy -ProxyHost $cfg.ProxyHost -ProxyPort $cfg.ProxyPort `
+                        -User $Fenetre.FindName("ChampProxyUser").Text.Trim() `
+                        -Password $Fenetre.FindName("ChampProxyPass").Text
+            Save-RelayPort -Port ([int]$relais.Port)
+            $cfg.ProxyHost = $relais.Host
+            $cfg.ProxyPort = $relais.Port
+            $cfg.ProxyRelay = $true
+            $cfg.ProxyRelayTarget = $relais.Target
+            Add-Journal $Fenetre "info" ("Proxy authentifie : relais local " + $relais.Host + ":" + $relais.Port + " vers " + $relais.Target + " (mot de passe non enregistre).")
+        }
+
+        Save-ConfigPoste $Fenetre $cfg
+        if (-not (Show-ConfirmationDeploiement $cfg)) {
+            Add-Journal $Fenetre "avr" "Deploiement annule a la confirmation."
+            Stop-ProxyRelay ; Clear-RelayPort
             return
         }
 
@@ -493,6 +685,7 @@ function Start-Deploiement {
         # Rien n'a demarre : on referme ce qui a pu s'ouvrir avant de le dire.
         if ($null -ne $ps) { try { $ps.Dispose() } catch { } }
         if ($null -ne $rs) { try { $rs.Close() ; $rs.Dispose() } catch { } }
+        Stop-ProxyRelay ; Clear-RelayPort
         Add-Journal $Fenetre "err" ("Deploiement impossible : " + $_.Exception.Message)
         return
     }
@@ -504,6 +697,7 @@ function Start-Deploiement {
     $Fenetre.FindName("Journal").Children.Clear()
     Reset-Scene $Fenetre
     $Fenetre.FindName("BtnInstaller").IsEnabled = $false
+    $Fenetre.FindName("BtnActiver").IsEnabled = $false
     Set-Activite $Fenetre $true
     Add-Journal $Fenetre "info" "Deploiement lance : worker du moteur, cinq etapes."
 
@@ -573,6 +767,8 @@ function Start-Deploiement {
                 $fen.FindName("Jauge").Value = 100
                 $fen.FindName("EtapePourcent").Text = "100 %"
             }
+            $fichier = Save-Journal $fen
+            if ($fichier -ne "") { Add-Journal $fen "info" ("Journal enregistre : " + $fichier) }
             Stop-PompeMoteur $fen
         }
     })
@@ -852,6 +1048,47 @@ function Show-Reliquat {
     $script:dlgReliquat = $null
 }
 
+function Show-ReliquatMesure {
+    # Reliquat d'un deploiement interrompu : seule la couche qui pointe sur le port
+    # enregistre au lancement du relais est en cause, et la remise en acces direct
+    # n'est annoncee reussie que si netsh la confirme.
+    param($Fenetre)
+    $port = Get-RelayPort
+    if ($port -le 0) { return }
+    $residu = Test-ProxyRelayResidue -RelayPort $port
+    if (-not $residu.Found) {
+        # Le marqueur ne designe plus un relais mort : il est perime.
+        if ($residu.Reason -ne "relais vivant") { Clear-RelayPort }
+        return
+    }
+    $couches = @()
+    if ($residu.WinHttp) { $couches += "WinHTTP (machine)" }
+    if ($residu.WinInet) { $couches += "session (HKCU)" }
+    $adresse = $residu.Host + ":" + $residu.Port
+    $dlg = Import-Xaml "ReliquatProxy.xaml"
+    $script:dlgReliquat = $dlg
+    $dlg.Owner = $Fenetre
+    # Valeurs mesurees : le XAML garde le texte de reference pour la capture.
+    $dlg.FindName("ReliquatTexte").Text = [string]::Format([string]$dlg.FindResource("ReliquatMesure"), ($couches -join " et "), $adresse)
+    $nonConcernee = [string]$dlg.FindResource("ReliquatNonConcernee")
+    $dlg.FindName("ReliquatWinHttp").Text = if ($residu.WinHttp) { $adresse } else { $nonConcernee }
+    $dlg.FindName("ReliquatSession").Text = if ($residu.WinInet) { $adresse } else { $nonConcernee }
+    $dlg.FindName("ReliquatMarqueur").Text = "Port enregistre : relay-port.txt (" + $port + ")"
+    $dlg.FindName("BtnRestaurer").Add_Click({
+        $fix = Reset-ProxyRelayResidue -WinHttp ([bool]$residu.WinHttp) -WinInet ([bool]$residu.WinInet)
+        $ligne = if ($fix.OK) { "Reliquat supprime : acces direct retabli (" + ($couches -join ", ") + ")." } else { "Remise en acces direct incomplete : " + $fix.Detail }
+        Add-Journal $script:fenetre $(if ($fix.OK) { "ok" } else { "err" }) $ligne
+        if ($fix.OK) { Clear-RelayPort }
+        $script:dlgReliquat.DialogResult = $true
+    })
+    $dlg.FindName("BtnConserver").Add_Click({
+        Add-Journal $script:fenetre "avr" ("Reliquat conserve : proxy " + $adresse + " (port mort) sur " + ($couches -join ", ") + ".")
+        $script:dlgReliquat.DialogResult = $false
+    })
+    [void]$dlg.ShowDialog()
+    $script:dlgReliquat = $null
+}
+
 # Exclues selon les cases du dialogue des applications (6 incluses, 3 exclues au depart).
 function Get-ApplicationsExclues {
     param($Dlg)
@@ -860,6 +1097,13 @@ function Get-ApplicationsExclues {
         if (-not $Dlg.FindName($a.Cle).IsChecked) { $exclues += $a.Nom }
     }
     return $exclues
+}
+
+function Update-LibelleApps {
+    # Les identifiants ODT pilotent le XML ; l'etiquette, elle, montre les libelles.
+    param($Fenetre)
+    $libelles = @($APPS | Where-Object { $script:appsExclues -contains $_.Nom } | ForEach-Object { $_.Libelle })
+    $Fenetre.FindName("LblApps").Text = if ($libelles.Count -eq 0) { "Toutes les applications incluses" } else { "Exclues : " + ($libelles -join ", ") }
 }
 
 function Show-Applications {
@@ -876,11 +1120,8 @@ function Show-Applications {
     & $maj
     $dlg.FindName("BtnAppliquer").Add_Click({
         $exclues = @(Get-ApplicationsExclues $script:dlgApps)
-        # Les identifiants ODT pilotent le XML ; l'etiquette, elle, montre les libelles.
         $script:appsExclues = $exclues
-        $libelles = @($APPS | Where-Object { $exclues -contains $_.Nom } | ForEach-Object { $_.Libelle })
-        $texte = if ($exclues.Count -eq 0) { "Toutes les applications incluses" } else { "Exclues : " + ($libelles -join ", ") }
-        $script:fenetre.FindName("LblApps").Text = $texte
+        Update-LibelleApps $script:fenetre
         Add-Journal $script:fenetre "info" ("Applications retenues - " + $(if ($exclues.Count -eq 0) { "aucune exclusion" } else { "exclues : " + ($exclues -join ", ") }))
         $script:dlgApps.DialogResult = $true
     })
@@ -1087,7 +1328,7 @@ $win.FindName("BtnEffacer").Add_Click({
     Add-Journal $win "info" "Journal efface."
 })
 $win.FindName("BtnRafraichir").Add_Click({ Update-PreVol $win })
-$win.FindName("BtnReliquat").Add_Click({ Show-Reliquat $win })
+$win.FindName("BtnExporter").Add_Click({ Export-Journal $win })
 $win.FindName("BtnApps").Add_Click({ Show-Applications $win })
 
 # Selecteur de langue : l'apercu fait defiler les deux valeurs du script.
@@ -1100,8 +1341,25 @@ foreach ($n in @("ChkDepot", "ChkProxy", "ChkKms", "ChkCle", "RadXmlAuto", "RadX
     $win.FindName($n).Add_Click({ Update-Options $win })
 }
 Update-Options $win
-# Pre-vol mesure des l'ouverture : l'ecran ne montre que ce qui a ete constate.
+# Le relais, le marqueur, le reliquat et le chiffrement sont le code du moteur :
+# extraits par analyse syntaxique, ils sont evalues ici, jamais recopies.
+$LOG_FOLDER = Get-ConstanteMoteur $CheminMoteur "LOG_FOLDER"
+$CONFIG_FILE = Join-Path $env:APPDATA "Office2024Deploy\config.json"
+. ([scriptblock]::Create((Get-DefinitionsMoteur $CheminMoteur -Noms @(
+    "Test-TcpPort",
+    "Get-RelayMarkerPath", "Save-RelayPort", "Get-RelayPort", "Clear-RelayPort", "Clear-RelayPortIfRestored",
+    "Get-ProxyRelaySink", "Get-WinHttpProxyAddress", "Get-InetProxyAddress",
+    "Test-ProxyRelayResidue", "Reset-ProxyRelayResidue",
+    "Start-ProxyRelay", "Stop-ProxyRelay", "Start-AuthenticatedProxy",
+    "Protect-SecretText", "Unprotect-SecretText", "Get-Config", "Save-Config"
+))))
+# Reglages du poste, puis mesures : l'ecran ne montre que ce qui a ete constate sur
+# les valeurs qui partiront reellement.
+Import-ConfigPoste $win
 Update-PreVol $win
+# Reliquat d'un deploiement interrompu, cherche sur le seul port que ce programme a
+# enregistre : un autre proxy local n'est jamais touche.
+Show-ReliquatMesure $win
 
 # Parcourir : vraies boites de dialogue systeme, aucune ecriture.
 $win.FindName("BtnSetup").Add_Click({
@@ -1144,6 +1402,7 @@ $win.FindName("BtnTestKms").Add_Click({ Update-PreVol $win })
 # Le bouton lance le worker du moteur. Le scenario simule ne sert plus qu'aux
 # captures : l'interactif deploye pour de vrai, ou refuse en nommant ce qui manque.
 $win.FindName("BtnInstaller").Add_Click({ Start-Deploiement $win $cheminMoteur })
+$win.FindName("BtnActiver").Add_Click({ Start-Deploiement $win $cheminMoteur -ActiverSeul })
 
 if ($Dialogue) { Show-Reliquat $win }
 if ($Applications) { Show-Applications $win }

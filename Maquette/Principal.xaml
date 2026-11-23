@@ -495,8 +495,8 @@
                       VerticalAlignment="Center">
             <TextBlock Text="Lycée Loritz, Grand Est" Style="{StaticResource Secondaire}"
                        VerticalAlignment="Center" Margin="0,0,16,0"/>
-            <Button x:Name="BtnReliquat" Style="{StaticResource BoutonSecondaire}"
-                    Content="Simuler un reliquat de proxy" Padding="12,6" FontSize="12"/>
+            <Button x:Name="BtnActiver" Style="{StaticResource BoutonSecondaire}"
+                    Content="Activer seulement" Padding="12,6" FontSize="12"/>
             <Button x:Name="BtnInstaller" Style="{StaticResource BoutonPrimaire}"
                     Content="Installer Office 2024" Margin="8,0,0,0"/>
           </StackPanel>
