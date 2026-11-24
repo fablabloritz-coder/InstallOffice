@@ -1704,14 +1704,6 @@ function Set-FocusCapture {
     $controle.SetValue((Get-CleEtatNommee "IsKeyboardFocused"), $true)
 }
 
-# --- Verification de l'interface a l'execution (controle automatise) --------
-# Commutateur cache, absent du mode d'emploi : la suite lui donne le fichier des noms que
-# le script demande a la fenetre. Ce mode charge les cinq XAML, ouvre les fenetres hors
-# ecran (position negative, pas de barre de taches, placement manuel pour que
-# CenterScreen ne les ramene pas au milieu) et verifie que chaque nom s'y resout
-# vraiment. Un nom present dans le XAML mais place dans un modele ou un dictionnaire de
-# ressources ne se resout pas a l'execution : c'est ce que le controle statique ne voit
-# pas. Le rapport est ecrit dans le fichier demande ; code de sortie 0 si tout se resout.
 # --- Verification du champ de cle : la vraie fenetre, hors ecran -------------
 # Le correctif ne se prouve pas en cherchant Add_GotFocus dans le texte : on ouvre la
 # fenetre livree, on met le focus sur le champ, on colle une cle et on relit ce que
@@ -1723,7 +1715,6 @@ if ($VerifierCle -ne "") {
     try {
         $fenetreCle = Import-Xaml "Principal.xaml"
         Show-HorsEcran $fenetreCle
-        $null = $fenetreCle.Activate()
         $fenetreCle.FindName("ChkCle").IsChecked = $true
         Set-Actif $fenetreCle @("ChampCle") $true
         Register-ChampCle $fenetreCle
@@ -1759,6 +1750,14 @@ if ($VerifierCle -ne "") {
     exit 1
 }
 
+# --- Verification de l'interface a l'execution (controle automatise) --------
+# Commutateur cache, absent du mode d'emploi : la suite lui donne le fichier des noms que
+# le script demande a la fenetre. Ce mode charge les cinq XAML, ouvre les fenetres hors
+# ecran (position negative, pas de barre de taches, placement manuel pour que
+# CenterScreen ne les ramene pas au milieu) et verifie que chaque nom s'y resout
+# vraiment. Un nom present dans le XAML mais place dans un modele ou un dictionnaire de
+# ressources ne se resout pas a l'execution : c'est ce que le controle statique ne voit
+# pas. Le rapport est ecrit dans le fichier demande ; code de sortie 0 si tout se resout.
 if ($VerifierInterface -ne "") {
     if ($RapportInterface -eq "") { $RapportInterface = $VerifierInterface + ".rapport" }
     $fichiersInterface = @("Principal.xaml", "ReliquatProxy.xaml", "Applications.xaml", "Etats.xaml", "Styles.xaml")

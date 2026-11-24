@@ -29,7 +29,7 @@
     Usage :
       powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Banc-ProxyAuthentifie.ps1
       ... -Rapport .\banc.json
-      ... -Odt -SecondesOdt 60
+      ... -Odt -SecondesOdt 300
       ... -Odt -WinInet
 #>
 param(
@@ -38,7 +38,9 @@ param(
     [string]$Rapport = "",
     [switch]$SansConsole,
     [switch]$Odt,
-    [int]$SecondesOdt = 60,
+    # Un fichier ne compte que s'il est complet : la borne doit laisser le temps d'en
+    # telecharger un entier (60 s n'y suffisaient pas, la preuve echouait sans argument).
+    [int]$SecondesOdt = 300,
     [switch]$WinInet,
     [string]$SetupExe = ""
 )
@@ -264,6 +266,7 @@ public class BancProxyAmont
                 string rep = BancReseau.LireEntete(os);
                 long longueur = -1;
                 long total = -1;
+                bool aRange = false;
                 foreach (string l in rep.Split('\n'))
                 {
                     string t = l.TrimEnd('\r');
@@ -277,12 +280,16 @@ public class BancProxyAmont
                         // "bytes 0-1048575/4050066" : le total, c'est la taille du fichier.
                         // ODT telecharge les gros .cab par plages : comparer le fichier au
                         // Content-Length d'une plage le declarerait tronque a tort.
+                        aRange = true;
                         string[] morceaux = t.Substring(14).Trim().Split('/');
                         long v;
                         if (morceaux.Length == 2 && long.TryParse(morceaux[1].Trim(), out v)) { total = v; }
                     }
                 }
-                if (total < 0) { total = longueur; }
+                // Une reponse par plages sans total annonce ("bytes 0-99/*") ne dit pas
+                // la taille du fichier : la longueur de la plage ferait passer un morceau
+                // pour un fichier entier, donc on la laisse inconnue.
+                if (!aRange) { total = longueur; }
                 Log("LEN " + total + " " + cible);
                 byte[] rb3 = Encoding.ASCII.GetBytes(rep);
                 s.Write(rb3, 0, rb3.Length);
@@ -528,7 +535,7 @@ try {
 
     # 3. ODT reel, borne dans le temps : le journal du proxy tranche.
     if ($Odt) {
-        $odtResultat = @{ Tente = $true ; Ok = $false ; Secondes = $SecondesOdt ; Lignes = @() ; Cabs = @() ; Complet = $false ; Note = "" }
+        $odtResultat = @{ Tente = $true ; Ok = $false ; Secondes = $SecondesOdt ; Lignes = @() ; Fichiers = @() ; Complet = $false ; Note = "" }
         if (-not (Test-Path -LiteralPath $SetupExe)) {
             $odtResultat.Note = "setup.exe absent : " + $SetupExe
         } else {
@@ -569,48 +576,58 @@ try {
             }
 
             Write-Banc ("ODT : setup.exe /download derriere le relais, " + $SecondesOdt + " s au maximum...")
+            # Le journal est commun aux preuves hors ligne : seule la partie ecrite pendant
+            # ce telechargement compte pour les tailles.
+            $ligneDepart = 0
+            if (Test-Path -LiteralPath $journalProxy) { $ligneDepart = @(Get-Content -LiteralPath $journalProxy).Count }
             $p = Start-Process -FilePath $SetupExe -ArgumentList @("/download", $xml) -PassThru -WindowStyle Hidden
             if (-not $p.WaitForExit($SecondesOdt * 1000)) {
                 try { Stop-Process -Id $p.Id -Force } catch { }
-                $odtResultat.Note = ("arrete apres " + $SecondesOdt + " s (le telechargement complet n'est pas le sujet)")
+                $odtResultat.Note = ("arrete apres " + $SecondesOdt + " s : aucun fichier complet dans ce delai, augmenter -SecondesOdt")
             } else {
                 $odtResultat.Note = ("setup.exe termine avec le code " + $p.ExitCode)
             }
             Start-Sleep -Milliseconds 500
             $lignes = @()
-            if (Test-Path -LiteralPath $journalProxy) { $lignes = @(Get-Content -LiteralPath $journalProxy) }
+            if (Test-Path -LiteralPath $journalProxy) { $lignes = @(Get-Content -LiteralPath $journalProxy | Select-Object -Skip $ligneDepart) }
             $versCdn = @($lignes | Where-Object { $_ -match "CONNECT .*officecdn|CONNECT .*microsoft" })
             $odtResultat.Lignes = @($versCdn | ForEach-Object { [string]$_ })
 
-            # Un cab est complet quand sa taille sur disque egale le Content-Length annonce
-            # par le CDN : c'est la difference entre "le flux passe" et "le fichier arrive
-            # entier". Un .cab servi en HTTPS (tunnel) n'annonce pas sa taille : inconnue.
+            # Un fichier (.cab ou .dat) est complet quand sa taille sur disque egale le
+            # Content-Length annonce par le CDN : c'est la difference entre "le flux passe"
+            # et "le fichier arrive entier". Les .dat (stream.x64...) portent l'essentiel du
+            # telechargement et suivent la meme regle. Un fichier servi en HTTPS (tunnel)
+            # n'annonce pas sa taille : inconnue.
             $attentes = @{}
             foreach ($l in $lignes) {
                 if ($l -match '^[0-9:.]+\s+LEN\s+(-?\d+)\s+(\S+)$') {
                     $n = [long]$matches[1]
-                    $nomCab = [System.IO.Path]::GetFileName(([string]$matches[2] -split '\?')[0])
-                    if (($n -ge 0) -and ($nomCab -ne "")) { $attentes[$nomCab.ToLower()] = $n }
+                    $nomFichier = [System.IO.Path]::GetFileName(([string]$matches[2] -split '\?')[0])
+                    if (($n -ge 0) -and ($nomFichier -ne "")) { $attentes[$nomFichier.ToLower()] = $n }
                 }
             }
-            $cabs = @()
+            $fichiers = @()
             if (Test-Path -LiteralPath $sourcesOdt) {
-                foreach ($f in @(Get-ChildItem -LiteralPath $sourcesOdt -Recurse -Filter *.cab -File -ErrorAction SilentlyContinue)) {
+                foreach ($f in @(Get-ChildItem -LiteralPath $sourcesOdt -Recurse -File -ErrorAction SilentlyContinue |
+                                 Where-Object { ($_.Extension -eq ".cab") -or ($_.Extension -eq ".dat") })) {
                     $attendu = -1
                     if ($attentes.ContainsKey($f.Name.ToLower())) { $attendu = [long]$attentes[$f.Name.ToLower()] }
                     $complet = $null
                     if ($attendu -ge 0) { $complet = ($f.Length -eq $attendu) }
-                    $cabs += [ordered]@{ Nom = $f.Name ; Octets = [long]$f.Length ; Attendu = $attendu ; Complet = $complet }
+                    $fichiers += [ordered]@{ Nom = $f.Name ; Octets = [long]$f.Length ; Attendu = $attendu ; Complet = $complet }
                 }
             }
-            $odtResultat.Cabs = @($cabs)
-            $odtResultat.Complet = (@($cabs | Where-Object { $_.Complet -eq $true }).Count -gt 0)
+            $odtResultat.Fichiers = @($fichiers)
+            $odtResultat.Complet = (@($fichiers | Where-Object { $_.Complet -eq $true }).Count -gt 0)
             $odtResultat.Ok = ($versCdn.Count -gt 0) -and $odtResultat.Complet
             if (-not $odtResultat.Ok) {
+                $verifiables = @($fichiers | Where-Object { $_.Attendu -ge 0 }).Count
                 if ($versCdn.Count -eq 0) {
                     $odtResultat.Note += " ; aucune ligne CONNECT vers le CDN : Click-to-Run n'a pas utilise le relais (WinHTTP n'est reglable qu'en administrateur)"
+                } elseif ($verifiables -eq 0) {
+                    $odtResultat.Note += " ; aucun fichier verifiable : tous servis en HTTPS ou sans Content-Length"
                 } elseif (-not $odtResultat.Complet) {
-                    $odtResultat.Note += " ; le flux passe mais aucun .cab complet : augmenter -SecondesOdt"
+                    $odtResultat.Note += " ; le flux passe mais aucun fichier complet (.cab ou .dat) : augmenter -SecondesOdt"
                 }
             }
         }
@@ -650,8 +667,8 @@ foreach ($t in $tests) {
 if ($odtResultat.Tente) {
     Write-Banc ("  " + $(if ($odtResultat.Ok) { "OK   " } else { "ECHEC" }) + "  ODT derriere le relais : " + $odtResultat.Note)
     foreach ($l in $odtResultat.Lignes) { Write-Banc ("         " + $l) }
-    foreach ($c in @($odtResultat.Cabs)) {
-        $vue = if ($null -eq $c.Complet) { "taille inconnue (HTTPS)" } elseif ($c.Complet) { "complet" } else { "TRONQUE" }
+    foreach ($c in @($odtResultat.Fichiers)) {
+        $vue = if ($null -eq $c.Complet) { "taille inconnue" } elseif ($c.Complet) { "complet" } else { "TRONQUE" }
         Write-Banc ("         " + $c.Nom + "  " + $c.Octets + " / " + $c.Attendu + " octets  " + $vue)
     }
 }

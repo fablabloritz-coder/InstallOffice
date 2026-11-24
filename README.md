@@ -140,8 +140,12 @@ reprend les mêmes lignes.
 ### Le téléchargement ODT réel
 
 ```powershell
-... -Odt -WinInet -SecondesOdt 300
+... -Odt -WinInet
 ```
+
+`-SecondesOdt` vaut 300 s par défaut : c'est la borne qui laisse le temps d'un fichier
+entier (`.cab` ou `.dat`), puisque la preuve exige un fichier complet ; sur un lien plus
+lent, l'augmenter.
 
 Le banc règle alors le proxy de session et les variables d'environnement sur le relais,
 lance un vrai `setup.exe /download` borné dans le temps, puis relit le journal : des lignes
@@ -150,12 +154,13 @@ Click-to-Run passe par le relais. Sans `-WinInet`, seul l'environnement est rég
 demande les droits administrateur : sans eux, ODT peut ignorer le relais, et le banc le dit
 au lieu de le masquer.
 
-Le rapport va plus loin que « le flux passe ». Pour chaque `.cab` écrit dans les sources, il
+Le rapport va plus loin que « le flux passe ». Pour chaque `.cab` **et** chaque `.dat`
+écrit dans les sources — les `stream.x64…dat` portent l'essentiel du téléchargement —, il
 compare la taille du fichier au `Content-Length` annoncé par le CDN — ou au total du
 `Content-Range` quand ODT télécharge par plages, ce qui est le cas des gros fichiers. Un
 fichier n'est déclaré `Complet` que si les deux coïncident, et `Odt.Ok` exige au moins un
-`.cab` complet : un flux qui traverse le relais sans qu'aucun fichier n'arrive entier ne
-passe plus pour une réussite. Un `.cab` servi en HTTPS (donc dans un tunnel) n'annonce pas
+fichier complet : un flux qui traverse le relais sans qu'aucun fichier n'arrive entier ne
+passe plus pour une réussite. Un fichier servi en HTTPS (donc dans un tunnel) n'annonce pas
 sa taille : il est marqué « inconnue », jamais « complet ».
 
 Ce que ce banc a appris, et qui est corrigé : le relais ne traitait que `CONNECT`. Or ODT
@@ -339,7 +344,7 @@ conforme.
 Empreinte du binaire livré, publiée ici pour être comparée sans git :
 
 ```
-SHA256 Install-Office2024-KMS.exe = 801A94AE1E1868633784BF274580F626AE7A343CA0318D9E48B4721FE6912F46
+SHA256 Install-Office2024-KMS.exe = 8904C8003B9153FF4ECFA8DD593137BDD48EB684773AEB4BC77EC04540552226
 ```
 
 La suite compare cette ligne au fichier livré : une recompilation sans mise à jour du
