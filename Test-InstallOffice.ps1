@@ -226,6 +226,57 @@ function New-HookRepo {
     $null = & git -C $Path commit -q --no-verify -m "etat de reference" 2>&1
 }
 
+# ------------------------------------------------------------- sh du hook
+# Le hook est un script POSIX : il faut sh. Sur un poste ou PowerShell est lance
+# hors de Git Bash, sh n'est pas sur le PATH alors que git, lui, est installe. Le
+# resoudre par git evite un echec de harnais qui sauterait toute la section 10 ;
+# s'il reste introuvable, les controles qui en dependent echouent en le nommant.
+function Get-ShExe {
+    $direct = Get-Command sh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($direct) { return $direct.Source }
+    $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $git) { return $null }
+    # Deux points de depart : le dossier de git.exe et celui que git declare comme
+    # libexec (<git>/<arch>/libexec/git-core). sh vit a la racine de l'installation
+    # (bin/ ou usr/bin/), donc on remonte jusqu'a quatre niveaux avant de chercher.
+    $departs = @()
+    $execPath = (& git --exec-path 2>$null)
+    if (($LASTEXITCODE -eq 0) -and $execPath) { $departs += (Split-Path $execPath -Parent) }
+    $departs += (Split-Path $git.Source -Parent)
+    $relatifs = @("sh.exe", "bin\sh.exe", "usr\bin\sh.exe", "mingw64\bin\sh.exe", "ucrt64\bin\sh.exe")
+    foreach ($depart in $departs) {
+        $dossier = $depart
+        for ($niveau = 0; ($niveau -lt 4) -and $dossier; $niveau++) {
+            foreach ($relatif in $relatifs) {
+                $candidat = Join-Path $dossier $relatif
+                if (Test-Path -LiteralPath $candidat) { return $candidat }
+            }
+            $dossier = Split-Path $dossier -Parent
+        }
+    }
+    return $null
+}
+
+# Jamais levante : un sh absent rend un code 127 et un motif lisible, pas une
+# exception qui emporterait la section entiere. L'appelant a deja change de dossier.
+function Invoke-HookSh {
+    param([string]$ShExe, [string]$Hook)
+    $script:HookShCode = 127
+    if (-not $ShExe) { return "sh introuvable : ni sur le PATH, ni dans l'installation de git" }
+    $eapHook = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $texte = (& $ShExe $Hook 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+        $script:HookShCode = $LASTEXITCODE
+        return $texte
+    } catch {
+        $script:HookShCode = 127
+        return ("sh inutilisable (" + $ShExe + ") : " + $_.Exception.Message)
+    } finally {
+        $ErrorActionPreference = $eapHook
+    }
+}
+
 # ---------------------------------------------------------------- execution
 if (-not (Test-Path $MainScript)) { Write-Host ("Interface introuvable : " + $MainScript) ; exit 2 }
 if (-not (Test-Path $EngineScript)) { Write-Host ("Moteur introuvable : " + $EngineScript + " (le worker en est extrait)") ; exit 2 }
@@ -366,7 +417,7 @@ try {
         # Autres proprietes du binaire livre : meme commande de compilation que le README.
         $vi = (Get-Item -LiteralPath $exePath).VersionInfo
         $cons = " - RECOMPILER avec Invoke-PS2EXE (README, section Compilation de l EXE)"
-        Check "EXE : version 8.3.0.0" (($vi.FileVersion -eq "8.3.0.0") -and ($vi.ProductVersion -eq "8.3.0.0")) ("FileVersion=" + $vi.FileVersion + " ProductVersion=" + $vi.ProductVersion + " (attendu 8.3.0.0 / -Version)" + $cons)
+        Check "EXE : version 8.4.0.0" (($vi.FileVersion -eq "8.4.0.0") -and ($vi.ProductVersion -eq "8.4.0.0")) ("FileVersion=" + $vi.FileVersion + " ProductVersion=" + $vi.ProductVersion + " (attendu 8.4.0.0 / -Version)" + $cons)
         # Le badge de la fenetre annonce la version du binaire : deux sources, donc un
         # controle. Le badge est lu dans le XAML livre, pas dans une constante du test.
         $badge = if ($xaml -match '<TextBlock Text="([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)"\s+FontSize="11"') { $matches[1] } else { "(absent)" }
@@ -1406,6 +1457,9 @@ public class FakeAuthProxy
     # Le hook doit valider l'index (ce qui part dans le commit), pas l'arbre de travail.
     # Preuve : faire diverger les deux dans un depot jetable et exiger le bon verdict.
     $gitCmd = Get-Command git -ErrorAction SilentlyContinue
+    $shExe = Get-ShExe
+    $hookJouable = ($null -ne $shExe)
+    $motifSh = if ($hookJouable) { "" } else { "sh introuvable (ni PATH ni installation de git), hook non execute : " }
     $hookSrc = Join-Path $PSScriptRoot ".githooks\pre-commit"
     if ($null -eq $gitCmd) {
         Check "hook : git disponible" $false "git introuvable : le hook pre-commit n'a pas pu etre verifie"
@@ -1459,20 +1513,20 @@ public class FakeAuthProxy
             $eapAvant = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             Push-Location $depot
-            $sortieA = (& sh ".githooks/pre-commit" 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
-            $codeA = $LASTEXITCODE
+            $sortieA = Invoke-HookSh -ShExe $shExe -Hook ".githooks/pre-commit"
+            $codeA = $script:HookShCode
             Pop-Location
             $ErrorActionPreference = $eapAvant
             $sortieAU = ($sortieA -replace "\s+", " ").Trim()
-            Check "hook : refuse un script indexe desynchronise" ($codeA -ne 0) ("code=" + $codeA + " sortie=" + $sortieAU)
-            Check "hook : refuse en parlant de recompilation" ($sortieA.Contains("ne correspond plus au script")) $sortieAU
+            Check "hook : refuse un script indexe desynchronise" ($hookJouable -and ($codeA -ne 0)) ($motifSh + "code=" + $codeA + " sortie=" + $sortieAU)
+            Check "hook : refuse en parlant de recompilation" ($hookJouable -and $sortieA.Contains("ne correspond plus au script")) ($motifSh + $sortieAU)
             # L'empreinte citee dans l'echec doit etre celle du script indexe, pas celle de l'arbre.
             $vueHook = Join-Path $depot "_vue"
             New-Item -ItemType Directory -Path $vueHook -Force | Out-Null
             $null = & git -C $depot checkout-index --all --prefix="$vueHook/" 2>&1
             $hashIndexe = (Get-FileHash -LiteralPath (Join-Path $vueHook "Apercu-Maquette.ps1") -Algorithm SHA256).Hash
             Remove-Item -LiteralPath $vueHook -Recurse -Force -ErrorAction SilentlyContinue
-            Check "hook : empreinte comparee = script indexe" (($hashIndexe -ne $headHash) -and $sortieA.Contains($hashIndexe.Substring(0, 12))) ("index=" + $hashIndexe.Substring(0, 12) + " arbre=" + $headHash.Substring(0, 12) + " sortie=" + $sortieAU)
+            Check "hook : empreinte comparee = script indexe" ($hookJouable -and ($hashIndexe -ne $headHash) -and $sortieA.Contains($hashIndexe.Substring(0, 12))) ($motifSh + "index=" + $hashIndexe.Substring(0, 12) + " arbre=" + $headHash.Substring(0, 12) + " sortie=" + $sortieAU)
 
             # Cas B : l'arbre de travail derive, l'index est propre (suite temoin, rapide).
             $null = & git -C $depot reset -q 2>&1
@@ -1488,15 +1542,15 @@ public class FakeAuthProxy
             $env:HOOK_PROBE = $sonde
             $ErrorActionPreference = "Continue"
             Push-Location $depot
-            $sortieB = (& sh ".githooks/pre-commit" 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
-            $codeB = $LASTEXITCODE
+            $sortieB = Invoke-HookSh -ShExe $shExe -Hook ".githooks/pre-commit"
+            $codeB = $script:HookShCode
             Pop-Location
             $ErrorActionPreference = $eapAvant
-            Check "hook : accepte un arbre derive non indexe" ($codeB -eq 0) ("code=" + $codeB + " sortie=" + (($sortieB -replace "\s+", " ").Trim()))
+            Check "hook : accepte un arbre derive non indexe" ($hookJouable -and ($codeB -eq 0)) ($motifSh + "code=" + $codeB + " sortie=" + (($sortieB -replace "\s+", " ").Trim()))
             $vu = if (Test-Path -LiteralPath $sonde) { [System.IO.File]::ReadAllText($sonde).Trim() } else { "(absent)" }
             $arbreHash2 = (Get-FileHash -LiteralPath $scriptDepot -Algorithm SHA256).Hash
             $vuCourt = if ($vu.Length -ge 12) { $vu.Substring(0, 12) } else { $vu }
-            Check "hook : suite lancee sur le contenu indexe" (($vu -eq $headHash) -and ($arbreHash2 -ne $headHash)) ("suite a vu=" + $vuCourt + " index=" + $headHash.Substring(0, 12) + " arbre=" + $arbreHash2.Substring(0, 12))
+            Check "hook : suite lancee sur le contenu indexe" ($hookJouable -and ($vu -eq $headHash) -and ($arbreHash2 -ne $headHash)) ($motifSh + "suite a vu=" + $vuCourt + " index=" + $headHash.Substring(0, 12) + " arbre=" + $arbreHash2.Substring(0, 12))
 
             # Cas C : la declaration de fins de ligne retiree sur un poste en
             # core.autocrlf=true, comme celui du mainteneur. Le commit ne touche
@@ -1541,13 +1595,13 @@ public class FakeAuthProxy
                 Check "hook : .gitattributes surveille" (($indexeEol -contains ".gitattributes") -and (@($indexeEol | Where-Object { $_ -like "*.ps1" }).Count -eq 0)) ($indexeEol -join ", ")
                 $ErrorActionPreference = "Continue"
                 Push-Location $depotEol
-                $sortieC = (& sh ".githooks/pre-commit" 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
-                $codeC = $LASTEXITCODE
+                $sortieC = Invoke-HookSh -ShExe $shExe -Hook ".githooks/pre-commit"
+                $codeC = $script:HookShCode
                 Pop-Location
                 $ErrorActionPreference = $eapAvant
                 $sortieCU = ($sortieC -replace "\s+", " ").Trim()
-                Check "hook : refuse une declaration de fins de ligne retiree" ($codeC -ne 0) ("code=" + $codeC + " sortie=" + $sortieCU)
-                Check "hook : export independant de core.autocrlf" ($sortieC -match "CRLF=0 LF isole=") $sortieCU
+                Check "hook : refuse une declaration de fins de ligne retiree" ($hookJouable -and ($codeC -ne 0)) ($motifSh + "code=" + $codeC + " sortie=" + $sortieCU)
+                Check "hook : export independant de core.autocrlf" ($hookJouable -and ($sortieC -match "CRLF=0 LF isole=")) ($motifSh + $sortieCU)
             }
             finally {
                 $ErrorActionPreference = $eapEol

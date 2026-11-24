@@ -118,7 +118,7 @@ Invoke-PS2EXE -InputFile "Apercu-Maquette.ps1" `
               -Product "InstallOffice" `
               -Description "Installation Office LTSC 2024 et activation KMS" `
               -Company "Lycee Loritz" `
-              -Version "8.3.0.0"
+              -Version "8.4.0.0"
 ```
 
 (`Install-Module ps2exe` si le module est absent.)
@@ -168,7 +168,7 @@ conforme.
 Empreinte du binaire livré, publiée ici pour être comparée sans git :
 
 ```
-SHA256 Install-Office2024-KMS.exe = 292EFCBE527EC93A001909ACC2D534C361FEF6143DCD3FB9B1446296DDDADC90
+SHA256 Install-Office2024-KMS.exe = 2707A5047693AFFFA97626668C8FA6F4F25E8548F6B72585BBCDC04AB7E85C70
 ```
 
 La suite compare cette ligne au fichier livré : une recompilation sans mise à jour du
@@ -232,7 +232,7 @@ message **RECOMPILER** (section « Compilation de l'EXE »). Si le binaire n'exp
 script en clair (format compressé ou construction différente), l'échec dit que l'empreinte
 n'est **pas vérifiable** — sans conseil de recompilation, qui serait alors trompeur.
 
-Les autres propriétés du binaire livré sont contrôlées aussi : version `8.3.0.0`, titre
+Les autres propriétés du binaire livré sont contrôlées aussi : version `8.4.0.0`, titre
 `Deploiement Office 2024`, produit `InstallOffice`, société `Lycee Loritz` et manifeste
 `requireAdministrator`, plus `OriginalFilename` et `InternalName`, qui doivent porter le nom
 du fichier livré. Chaque écart nomme la valeur trouvée, celle attendue et l'option
