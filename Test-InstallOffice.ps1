@@ -457,16 +457,63 @@ try {
     $lignesInterface = @()
     $codeInterface = -1
     $lancePar = ""
+    $noteIf = ""
     $estAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")
     # Le binaire livre porte un manifeste requireAdministrator : sans elevation, Windows
     # refuse de le demarrer (code 740). La CI et un poste administrateur lancent l'EXE ;
     # ailleurs, le script extrait du binaire est joue a sa place, memes XAML.
+    # Lancement borne, sortie redirigee vers des fichiers. Le 24/11/2026, sur le runner
+    # windows-latest, le lancement pipe (& ... 2>&1 | ForEach-Object) n'a jamais rendu la
+    # main : le job a expire a 10 min sans dire ou il s'etait arrete. On attend le rapport
+    # (ce que le controle verifie vraiment), avec une limite, et on arrete le processus qui
+    # traine au lieu de laisser le job expirer.
+    $delaiRapport = 180
+    function Invoke-VerificationInterface {
+        param([string]$Fichier, [string]$Arguments, [string]$Origine)
+        # System.Diagnostics plutot que Start-Process : avec des redirections, Start-Process
+        # rend un processus dont ExitCode est vide (verifie le 24/11/2026 en PowerShell 5.1).
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $Fichier
+        $psi.Arguments = $Arguments
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $p = [System.Diagnostics.Process]::Start($psi)
+        # Lecture en tache de fond : un enfant bavard ne doit pas se bloquer sur un tube plein
+        # pendant qu'on attend son rapport.
+        $tacheSortie = $p.StandardOutput.ReadToEndAsync()
+        $tacheErreur = $p.StandardError.ReadToEndAsync()
+        $attente = 0.0
+        while ((-not (Test-Path -LiteralPath $rapportInterface)) -and (-not $p.HasExited) -and ($attente -lt $delaiRapport)) {
+            Start-Sleep -Milliseconds 500
+            $attente += 0.5
+        }
+        $note = ""
+        $code = -1
+        if ($p.HasExited) {
+            $code = $p.ExitCode
+            $note = "sorti (code " + $code + ")"
+        } elseif (Test-Path -LiteralPath $rapportInterface) {
+            if ($p.WaitForExit(20000)) { $code = $p.ExitCode ; $note = "rapport ecrit, sorti (code " + $code + ")" }
+            else { try { $p.Kill() } catch { } ; $note = "rapport ecrit, processus encore vivant apres 20 s, arrete" }
+        } else {
+            try { $p.Kill() } catch { }
+            $note = "aucun rapport apres " + $delaiRapport + " s, processus arrete"
+        }
+        $txt = ""
+        foreach ($t in @($tacheSortie, $tacheErreur)) {
+            $v = ""
+            try { $v = $t.Result.Trim() } catch { $v = "" }
+            if ($v -ne "") { $txt += " " + $Origine + "=[" + $v + "]" }
+        }
+        return @{ Code = $code ; Note = $note ; Sortie = $txt }
+    }
     if ($estAdmin -and (Test-Path -LiteralPath $exePath)) {
-        $eapIf = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-        $sortieIf = (& $exePath "-VerifierInterface" $listeInterface "-RapportInterface" $rapportInterface 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
-        $codeInterface = $LASTEXITCODE
-        $ErrorActionPreference = $eapIf
+        $r = Invoke-VerificationInterface -Fichier $exePath -Arguments ("-VerifierInterface `"" + $listeInterface + "`" -RapportInterface `"" + $rapportInterface + "`"") -Origine "exe"
+        $codeInterface = $r.Code
+        $sortieIf = $r.Sortie
+        $noteIf = $r.Note
         $lancePar = "EXE livre"
     }
     if (-not (Test-Path -LiteralPath $rapportInterface)) {
@@ -481,11 +528,10 @@ try {
             Copy-Item -LiteralPath $MainScript -Destination $scriptVerif -Force
             $lancePar = "script de la copie de travail (EXE illisible)"
         }
-        $eapIf = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-        $sortieIf = (& $psHost -NoProfile -STA -ExecutionPolicy Bypass -File $scriptVerif "-VerifierInterface" $listeInterface "-RapportInterface" $rapportInterface 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
-        $codeInterface = $LASTEXITCODE
-        $ErrorActionPreference = $eapIf
+        $r = Invoke-VerificationInterface -Fichier $psHost -Arguments ("-NoProfile -STA -ExecutionPolicy Bypass -File `"" + $scriptVerif + "`" -VerifierInterface `"" + $listeInterface + "`" -RapportInterface `"" + $rapportInterface + "`"") -Origine "script"
+        $codeInterface = $r.Code
+        $sortieIf = $r.Sortie
+        $noteIf = $r.Note
     }
     if (Test-Path -LiteralPath $rapportInterface) { $lignesInterface = @([System.IO.File]::ReadAllLines($rapportInterface)) }
     $resumeIf = @($lignesInterface | Where-Object { $_ -match '^interface : (\d+)/(\d+) noms resolus' })
@@ -501,7 +547,8 @@ try {
     $detailIf = $lancePar + " (code " + $codeInterface + ") : " + $resolusIf + "/" + $verifiesIf + " noms resolus, " + $nomsAttendus.Count + " attendus ; cinq XAML charges=" + ($fichiersIf.Count -eq 1) + " ; rapport=" + $rapportInterface
     if ($ecartsIf.Count -gt 0) { $detailIf += " ; " + ($ecartsIf -join " ; ") }
     if ($prefixesNonCouvers.Count -gt 0) { $detailIf += " ; prefixe dynamique sans suffixe connu, etendre la liste du controle : " + ($prefixesNonCouvers -join ", ") }
-    if (-not (Test-Path -LiteralPath $rapportInterface)) { $detailIf += " ; aucun rapport ecrit ; sortie=[" + $sortieIf + "]" }
+    if ($noteIf -ne "") { $detailIf += " ; " + $noteIf }
+    if (-not (Test-Path -LiteralPath $rapportInterface)) { $detailIf += " ; aucun rapport ecrit" + $sortieIf }
     Check "EXE livre : fenetres hors ecran, chaque nom d'interface resolu" $okIf $detailIf
     if ($lancePar -ne "EXE livre") {
         Write-Host ("         " + $lancePar + " joue a la place de l'EXE : sans droits administrateur, un binaire a manifeste requireAdministrator ne demarre pas (code 740). La CI et un poste administrateur lancent l'EXE.") -ForegroundColor Yellow
