@@ -417,7 +417,7 @@ try {
         # Autres proprietes du binaire livre : meme commande de compilation que le README.
         $vi = (Get-Item -LiteralPath $exePath).VersionInfo
         $cons = " - RECOMPILER avec Invoke-PS2EXE (README, section Compilation de l EXE)"
-        Check "EXE : version 8.4.0.0" (($vi.FileVersion -eq "8.4.0.0") -and ($vi.ProductVersion -eq "8.4.0.0")) ("FileVersion=" + $vi.FileVersion + " ProductVersion=" + $vi.ProductVersion + " (attendu 8.4.0.0 / -Version)" + $cons)
+        Check "EXE : version 8.4.1.0" (($vi.FileVersion -eq "8.4.1.0") -and ($vi.ProductVersion -eq "8.4.1.0")) ("FileVersion=" + $vi.FileVersion + " ProductVersion=" + $vi.ProductVersion + " (attendu 8.4.1.0 / -Version)" + $cons)
         # Le badge de la fenetre annonce la version du binaire : deux sources, donc un
         # controle. Le badge est lu dans le XAML livre, pas dans une constante du test.
         $badge = if ($xaml -match '<TextBlock Text="([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)"\s+FontSize="11"') { $matches[1] } else { "(absent)" }

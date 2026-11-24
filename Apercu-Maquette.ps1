@@ -1365,7 +1365,7 @@ if ($Capture -ne "") {
     } else {
         $win = Import-Xaml "Principal.xaml"
         # Capture : valeurs de reference, sauf -Mesure qui interroge vraiment le poste.
-        if ($Mesure) { Update-PreVol $win } else { Update-PreVol $win -Simule }
+        if ($Mesure) { $null = Update-PreVol $win } else { $null = Update-PreVol $win -Simule }
         for ($k = 0; $k -le $Etape; $k++) { Set-Scene $win $k }
         if ($Focus -ne "") { Set-FocusCapture $win $Focus }
         Export-Fenetre $win $Capture
@@ -1391,7 +1391,7 @@ $win.FindName("BtnEffacer").Add_Click({
     $win.FindName("Journal").Children.Clear()
     Add-Journal $win "info" "Journal efface."
 })
-$win.FindName("BtnRafraichir").Add_Click({ Update-PreVol $win })
+$win.FindName("BtnRafraichir").Add_Click({ $null = Update-PreVol $win })
 $win.FindName("BtnExporter").Add_Click({ Export-Journal $win })
 $win.FindName("BtnApps").Add_Click({ Show-Applications $win })
 
@@ -1420,7 +1420,9 @@ $CONFIG_FILE = Join-Path $env:APPDATA "Office2024Deploy\config.json"
 # Reglages du poste, puis mesures : l'ecran ne montre que ce qui a ete constate sur
 # les valeurs qui partiront reellement.
 Import-ConfigPoste $win
-Update-PreVol $win
+# La table du pre-vol est rendue a l'appelant : au demarrage elle n'a pas de destinataire,
+# donc $null, sinon PowerShell l'imprime dans la console du script.
+$null = Update-PreVol $win
 # Reliquat d'un deploiement interrompu, cherche sur le seul port que ce programme a
 # enregistre : un autre proxy local n'est jamais touche.
 Show-ReliquatMesure $win
@@ -1461,7 +1463,7 @@ $win.FindName("BtnTestProxy").Add_Click({
 # Un seul chemin pour le pre-vol : le bouton KMS relance la meme mesure que
 # Rafraichir. Il n'a pas son propre journal, sinon un seul test produisait trois
 # lignes et deux connexions.
-$win.FindName("BtnTestKms").Add_Click({ Update-PreVol $win })
+$win.FindName("BtnTestKms").Add_Click({ $null = Update-PreVol $win })
 
 # Le bouton lance le worker du moteur. Le scenario simule ne sert plus qu'aux
 # captures : l'interactif deploye pour de vrai, ou refuse en nommant ce qui manque.

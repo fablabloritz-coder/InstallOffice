@@ -86,7 +86,6 @@ configuration **WinHTTP de la machine**. Le script :
    d'environnement ;
 3. **restaure** la configuration d'origine en fin de déploiement.
 
-Un proxy **avec authentification** n'est pas exploitable par un service `LocalSystem` :
 Un proxy **avec authentification** (407) ne peut pas être satisfait par le service
 Click-to-Run, qui tourne en `LocalSystem` et n'a aucun moyen de saisir un mot de passe.
 C'est pourquoi les champs « Utilisateur » et « Mot de passe » du proxy existent : le
@@ -118,7 +117,7 @@ Invoke-PS2EXE -InputFile "Apercu-Maquette.ps1" `
               -Product "InstallOffice" `
               -Description "Installation Office LTSC 2024 et activation KMS" `
               -Company "Lycee Loritz" `
-              -Version "8.4.0.0"
+              -Version "8.4.1.0"
 ```
 
 (`Install-Module ps2exe` si le module est absent.)
@@ -168,7 +167,7 @@ conforme.
 Empreinte du binaire livré, publiée ici pour être comparée sans git :
 
 ```
-SHA256 Install-Office2024-KMS.exe = 2707A5047693AFFFA97626668C8FA6F4F25E8548F6B72585BBCDC04AB7E85C70
+SHA256 Install-Office2024-KMS.exe = B1979E1103D3FB0384B43D74ECE20DB3B75CF7158D62FBE63C0B2102B4A071D5
 ```
 
 La suite compare cette ligne au fichier livré : une recompilation sans mise à jour du
@@ -232,7 +231,7 @@ message **RECOMPILER** (section « Compilation de l'EXE »). Si le binaire n'exp
 script en clair (format compressé ou construction différente), l'échec dit que l'empreinte
 n'est **pas vérifiable** — sans conseil de recompilation, qui serait alors trompeur.
 
-Les autres propriétés du binaire livré sont contrôlées aussi : version `8.4.0.0`, titre
+Les autres propriétés du binaire livré sont contrôlées aussi : version `8.4.1.0`, titre
 `Deploiement Office 2024`, produit `InstallOffice`, société `Lycee Loritz` et manifeste
 `requireAdministrator`, plus `OriginalFilename` et `InternalName`, qui doivent porter le nom
 du fichier livré. Chaque écart nomme la valeur trouvée, celle attendue et l'option
