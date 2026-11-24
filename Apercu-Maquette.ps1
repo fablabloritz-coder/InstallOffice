@@ -56,7 +56,15 @@ param(
     # l'interface". -VerifierInterface porte la liste des noms attendus, -RapportInterface
     # le fichier ou ecrire le resultat (a cote de la liste par defaut).
     [string]$VerifierInterface = "",
-    [string]$RapportInterface = ""
+    [string]$RapportInterface = "",
+    # -VerifierCle ouvre la vraie fenetre hors ecran, met le focus sur le champ de cle
+    # et y colle une cle : le constat est ecrit dans le fichier indique.
+    [string]$VerifierCle = "",
+    # Deploiement sans fenetre (GPO, PsExec) : voir plus bas, "Mode silencieux".
+    # -Config porte le fichier JSON des reglages, -Rapport celui du rapport d'execution.
+    [switch]$Silent,
+    [string]$Config = "",
+    [string]$Rapport = ""
 )
 
 # Journal : en capture l'heure est figee (16:30:22 par defaut, plus 7 s par ligne,
@@ -76,11 +84,22 @@ $script:journalLignes = 0
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName System.Windows.Forms
 
-# EXE compile : $MyInvocation.MyCommand.Path porte le chemin du binaire. Un hote qui
-# ne le renseigne pas laisse la chaine vide : le dossier du binaire reste alors la
-# reference, et c'est la que le dossier Maquette est livre.
-$ici      = Split-Path -Parent $MyInvocation.MyCommand.Path
-if ([string]::IsNullOrWhiteSpace($ici)) { $ici = [System.AppDomain]::CurrentDomain.BaseDirectory.TrimEnd([char]'\') }
+# EXE compile (PS2EXE) : $MyInvocation.MyCommand.Path peut etre nul, et Split-Path
+# refuse alors un chemin nul - c'est la fenetre "parametre Path" qui s'affichait au
+# demarrage. Le dossier du binaire reste la reference, et c'est la que Maquette est livre.
+function Get-DossierScript {
+    param([string]$Chemin)
+    $d = ""
+    if (-not [string]::IsNullOrWhiteSpace($Chemin)) {
+        try { $d = Split-Path -Parent $Chemin } catch { $d = "" }
+    }
+    if ([string]::IsNullOrWhiteSpace($d)) { $d = [System.AppDomain]::CurrentDomain.BaseDirectory.TrimEnd([char]'\') }
+    # Dernier recours : la fonction ne rend jamais une chaine vide, sinon les Join-Path
+    # qui suivent leveraient sur le meme parametre Path.
+    if ([string]::IsNullOrWhiteSpace($d)) { $d = [System.IO.Path]::GetTempPath().TrimEnd([char]'\') }
+    return $d
+}
+$ici = Get-DossierScript -Chemin ([string]$MyInvocation.MyCommand.Path)
 $dossier  = Join-Path $ici "Maquette"
 $pinceaux = New-Object System.Windows.Media.BrushConverter
 $policeTexte = New-Object System.Windows.Media.FontFamily("Segoe UI Variable Text, Segoe UI")
@@ -93,6 +112,12 @@ $script:appsExclues = @("Teams", "OneDrive", "Lync")
 # Seuil d'espace du moteur ($DISK_MIN_GB) : une seule copie ici, pour que le pre-vol,
 # le refus de depart et la configuration envoyee au worker annoncent le meme chiffre.
 $script:disqueMinGo = 4
+
+# Version de l'outil, portee par le rapport du mode silencieux. Le badge du XAML,
+# le README, la suite et Compare-ExeRecompilation la repetent pour l'affichage et le
+# controle : la suite exige qu'elles soient toutes egales, pour qu'un bump oublie
+# quelque part se voie avant la livraison.
+$script:versionOutil = "8.5.0.0"
 
 $APPS = @(
     @{ Nom = "Word" ; Cle = "AppWord" ; Libelle = "Word" }
@@ -116,6 +141,18 @@ function Import-Xaml {
     $contexte.BaseUri = New-Object System.Uri($chemin)
     $flux = [System.IO.File]::OpenRead($chemin)
     try { return [System.Windows.Markup.XamlReader]::Load($flux, $contexte) } finally { $flux.Close() }
+}
+
+function Show-HorsEcran {
+    # Ouvre une fenetre hors ecran : la verification des noms et celle du champ de cle
+    # passent par la meme mise en place.
+    param($Fenetre)
+    $Fenetre.WindowStartupLocation = [System.Windows.WindowStartupLocation]::Manual
+    $Fenetre.Left = -32000
+    $Fenetre.Top = -32000
+    $Fenetre.ShowInTaskbar = $false
+    $Fenetre.Show()
+    $Fenetre.UpdateLayout()
 }
 
 function Get-Pinceau {
@@ -373,6 +410,34 @@ function Save-ConfigPoste {
     })
 }
 
+# Le champ de cle affiche un exemple tant qu'il est vide : cet exemple n'est pas une cle.
+# Sans ce filtre, un simple "Appliquer une cle produit" envoyait XXXXX-... a l'activation.
+# La forme de l'exemple est reconnue en plus du texte releve au cablage : meme si le
+# placeholder n'a pas ete capture, l'exemple ne part pas.
+function Get-CleSaisie {
+    param([string]$Texte, [string]$Placeholder)
+    $t = ([string]$Texte).Trim()
+    if ($t -eq "") { return "" }
+    if ($t -cmatch '^X{5}(-X{5}){4}$') { return "" }
+    if (($Placeholder -ne "") -and ($t -eq ([string]$Placeholder).Trim())) { return "" }
+    return $t
+}
+
+function Register-ChampCle {
+    # L'exemple du XAML n'est pas une cle : il s'efface au premier focus, donc un collage
+    # remplace le champ au lieu de s'y ajouter, et il revient si l'on quitte le champ vide.
+    # Le texte de reference vient du XAML, pas d'une seconde copie dans le script.
+    param($Fenetre)
+    $script:champCle = $Fenetre.FindName("ChampCle")
+    $script:clePlaceholder = [string]$script:champCle.Text
+    $script:champCle.Add_GotFocus({
+        if (($script:clePlaceholder -ne "") -and ($script:champCle.Text -eq $script:clePlaceholder)) { $script:champCle.Text = "" }
+    })
+    $script:champCle.Add_LostFocus({
+        if ([string]::IsNullOrWhiteSpace($script:champCle.Text)) { $script:champCle.Text = $script:clePlaceholder }
+    })
+}
+
 function Import-ConfigPoste {
     param($Fenetre)
     $s = Get-Config
@@ -518,6 +583,44 @@ function Get-ConstanteMoteur {
     throw ("Moteur : constante $" + $Nom + " introuvable dans " + $Chemin + ".")
 }
 
+function New-CfgDeploiement {
+    # Construit l'objet que le worker attend. Les valeurs viennent des champs de
+    # l'ecran en interactif et du fichier JSON en silencieux : une seule forme, donc un
+    # seul comportement a verifier.
+    param($Sync, $Valeurs)
+    return [pscustomobject]@{
+        SyncHash         = $Sync
+        ActivateOnly     = [bool]$Valeurs.ActivateOnly
+        SetupExePath     = [string]$Valeurs.SetupExePath
+        InstallFolder    = [string]$Valeurs.InstallFolder
+        ActualXMLPath    = [string]$Valeurs.ActualXMLPath
+        UseCustomXML     = [bool]$Valeurs.UseCustomXML
+        CustomXMLPath    = [string]$Valeurs.CustomXMLPath
+        ExcludedApps     = @($Valeurs.ExcludedApps)
+        LanguageID       = [string]$Valeurs.LanguageID
+        RemoveOld        = [bool]$Valeurs.RemoveOld
+        DoInstall        = [bool]$Valeurs.DoInstall
+        DoActivate       = [bool]$Valeurs.DoActivate
+        KmsHost          = [string]$Valeurs.KmsHost
+        KmsPort          = [string]$Valeurs.KmsPort
+        KmsSecondary     = [string]$Valeurs.KmsSecondary
+        ProxyEnabled     = [bool]$Valeurs.ProxyEnabled
+        ProxyHost        = [string]$Valeurs.ProxyHost
+        ProxyPort        = [string]$Valeurs.ProxyPort
+        ProxyRelay       = $false
+        ProxyRelayTarget = ""
+        ProxyBypass      = [string]$Valeurs.ProxyBypass
+        DepotEnabled     = [bool]$Valeurs.DepotEnabled
+        DepotPath        = [string]$Valeurs.DepotPath
+        SourcePath       = [string]$Valeurs.SourcePath
+        LocalDataPath    = [string]$Valeurs.LocalDataPath
+        DepotCopy        = $false
+        ApplyProductKey  = [bool]$Valeurs.ApplyProductKey
+        ProductKey       = [string]$Valeurs.ProductKey
+        DiskMinGB        = [int]$Valeurs.DiskMinGB
+    }
+}
+
 function Get-ConfigDeploiement {
     # Traduit les champs de l'ecran en l'objet que le worker du moteur attend. Les deux
     # valeurs mesurees par le pre-vol (setup.exe, adresse KMS) sont reprises telles
@@ -525,13 +628,13 @@ function Get-ConfigDeploiement {
     param($Fenetre, $Sync, $PreVol, [bool]$ActiverSeul)
     $dossier = $LOG_FOLDER
     $mode = Get-SourceMode $Fenetre
-    $xml = Join-Path $dossier "OfficeConfig2024.xml"
-    return [pscustomobject]@{
-        SyncHash        = $Sync
+    # La forme de l'objet est celle de New-CfgDeploiement, partagee avec le mode
+    # silencieux : le worker recoit la meme structure, quel que soit le point d'entree.
+    return New-CfgDeploiement $Sync @{
         ActivateOnly    = $ActiverSeul
         SetupExePath    = $PreVol.Setup
         InstallFolder   = $dossier
-        ActualXMLPath   = $xml
+        ActualXMLPath   = (Join-Path $dossier "OfficeConfig2024.xml")
         UseCustomXML    = [bool]$Fenetre.FindName("RadXmlFichier").IsChecked
         CustomXMLPath   = $Fenetre.FindName("ChampXml").Text.Trim()
         ExcludedApps    = @($script:appsExclues)
@@ -554,9 +657,352 @@ function Get-ConfigDeploiement {
         LocalDataPath   = $dossier
         DepotCopy       = $false
         ApplyProductKey = [bool]$Fenetre.FindName("ChkCle").IsChecked
-        ProductKey      = $Fenetre.FindName("ChampCle").Text.Trim()
+        ProductKey      = (Get-CleSaisie -Texte $Fenetre.FindName("ChampCle").Text -Placeholder $script:clePlaceholder)
         DiskMinGB       = $script:disqueMinGo
     }
+}
+
+# --- Mode silencieux : configuration, rapport, codes de sortie --------------
+# Un deploiement sans fenetre reutilise le worker du moteur : la configuration vient
+# d'un fichier JSON au lieu des champs de l'ecran, et le journal va dans un fichier au
+# lieu du panneau. Aucun deroulement n'est reecrit, et aucun secret n'est lu en clair.
+
+function Get-RefusDeploiement {
+    # Refus de depart, communs a l'ecran et au mode silencieux. Une activation seule ne
+    # passe ni par setup.exe, ni par un telechargement, ni par une installation : ces
+    # exigences ne la concernent pas.
+    param($Cfg, $PreVol)
+    $refus = @()
+    if (-not $Cfg.ActivateOnly) {
+        if (-not $PreVol.SetupPresent) { $refus += ("setup.exe absent : " + $PreVol.Setup) }
+        if (-not $PreVol.AssezDEspace) { $refus += ($PreVol.LibreGo.ToString([System.Globalization.CultureInfo]::InvariantCulture) + " Go libres, " + $script:disqueMinGo + " Go requis") }
+        if (-not $PreVol.Os.Ok) { $refus += "Windows 10+ requis" }
+    }
+    if (-not $PreVol.Admin) { $refus += "droits administrateur absents" }
+    if ($Cfg.DoActivate -and $Cfg.KmsHost -eq "") { $refus += "activation KMS demandee sans adresse de serveur" }
+    if ($Cfg.UseCustomXML -and $Cfg.CustomXMLPath -eq "") { $refus += "fichier XML choisi mais chemin vide" }
+    if ($Cfg.DepotEnabled -and $Cfg.DepotPath -eq "") { $refus += "depot de sources active sans chemin" }
+    return $refus
+}
+
+function Get-CodeSortie {
+    # Codes stables pour un deploiement scripte (GPO, PsExec) : un script qui les lit
+    # n'a pas a analyser le journal. 20 : sources ; 30 : installation, y compris la
+    # desinstallation de l'ancienne version ; 40 : activation KMS ; 60 : le reste.
+    param($Sync, [bool]$Inattendu = $false)
+    if ($Inattendu -or $null -eq $Sync) { return 60 }
+    $etats = @($Sync.StepState)
+    if ($etats.Count -lt 5) { return 60 }
+    if ($etats[2] -eq "error") { return 20 }
+    if (($etats[0] -eq "error") -or ($etats[3] -eq "error")) { return 30 }
+    if ($etats[4] -eq "error") { return 40 }
+    if ($etats -contains "error") { return 60 }
+    # Aucune etape en erreur alors que le worker se declare en echec : erreur hors etapes.
+    if ($Sync.HasError) { return 60 }
+    return 0
+}
+
+function New-EtapesRapport {
+    # Les cinq etapes telles que le worker les a laissees. Un refus avant depart rend
+    # cinq lignes "waiting" : le rapport existe, et il dit que rien n'a tourne.
+    param($Sync)
+    $noms = @("Desinstallation", "Preparation", "Sources", "Installation", "Activation KMS")
+    $etapes = @()
+    for ($i = 0; $i -lt 5; $i++) {
+        $etat = if ($null -ne $Sync) { [string]$Sync.StepState[$i] } else { "waiting" }
+        $etapes += [ordered]@{ Index = ($i + 1) ; Nom = $noms[$i] ; Etat = $etat }
+    }
+    return $etapes
+}
+
+function New-RapportPoste {
+    # Forme unique du rapport, refus compris : un poste qui n'a pas demarre laisse
+    # quand meme une trace lisible dans le tableau de bord du parc.
+    param($Contexte, [int]$Code, [string]$Message, $Etapes, [string]$Journal)
+    $fin = Get-Date
+    return [ordered]@{
+        Outil         = "InstallOffice"
+        Version       = [string]$Contexte.Version
+        Poste         = $env:COMPUTERNAME
+        Utilisateur   = $env:USERNAME
+        Mode          = [string]$Contexte.Mode
+        Debut         = $Contexte.Debut.ToString("yyyy-MM-dd HH:mm:ss")
+        Fin           = $fin.ToString("yyyy-MM-dd HH:mm:ss")
+        DureeSecondes = [int][Math]::Max(0, ($fin - $Contexte.Debut).TotalSeconds)
+        Code          = $Code
+        Resultat      = $(if ($Code -eq 0) { "Reussi" } else { "Echec" })
+        Etapes        = @($Etapes)
+        Kms           = [string]$Contexte.Kms
+        Proxy         = [string]$Contexte.Proxy
+        Message       = $Message
+        Journal       = $Journal
+    }
+}
+
+function Write-RapportPoste {
+    # JSON UTF-8 sans BOM. Un dossier absent est cree : le rapport part souvent sur un
+    # partage dont le sous-dossier depend du poste.
+    param([string]$Chemin, $Rapport)
+    $dossier = Split-Path -Parent $Chemin
+    if (-not [string]::IsNullOrWhiteSpace($dossier) -and -not (Test-Path -LiteralPath $dossier)) {
+        New-Item -ItemType Directory -Path $dossier -Force | Out-Null
+    }
+    # -InputObject : sans lui, le pipeline enumere le dictionnaire ordonne et le
+    # rapport part sous la forme de son nom de type, pas de son contenu.
+    $json = ConvertTo-Json -InputObject $Rapport -Depth 6
+    [System.IO.File]::WriteAllText($Chemin, $json, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function Get-ProprieteConfig {
+    # Propriete d'un objet JSON, ou $null : un fichier ecrit a la main peut omettre
+    # n'importe quelle cle, et l'absence n'est jamais une erreur de lecture.
+    param($Json, [string]$Nom)
+    if ($null -eq $Json) { return $null }
+    $p = $Json.PSObject.Properties[$Nom]
+    if ($null -eq $p) { return $null }
+    return $p.Value
+}
+
+function Get-SecretDeConfig {
+    # Un secret ne vient jamais du fichier en clair : il est lu dans une variable
+    # d'environnement nommee (ProxyPasswordEnv, ProductKeyEnv) ou dechiffre en DPAPI sur
+    # ce poste (ProxyPasswordEnc, ProductKeyEnc). Rien n'est invente : une valeur
+    # absente rend un motif, et l'appelant refuse en le nommant.
+    param($Json, [string]$Nom)
+    $variable = [string](Get-ProprieteConfig $Json ($Nom + "Env"))
+    if (-not [string]::IsNullOrWhiteSpace($variable)) {
+        $valeur = [System.Environment]::GetEnvironmentVariable($variable, "Process")
+        if ([string]::IsNullOrWhiteSpace($valeur)) {
+            return @{ Valeur = "" ; Motif = ("variable d'environnement " + $variable + " vide ou absente") }
+        }
+        return @{ Valeur = $valeur ; Motif = "" }
+    }
+    $chiffre = [string](Get-ProprieteConfig $Json ($Nom + "Enc"))
+    if (-not [string]::IsNullOrWhiteSpace($chiffre)) {
+        $valeur = Unprotect-SecretText $chiffre
+        if ([string]::IsNullOrWhiteSpace($valeur)) {
+            return @{ Valeur = "" ; Motif = ($Nom + "Enc illisible pour cette identite Windows (chiffre sur un autre poste ?)") }
+        }
+        return @{ Valeur = $valeur ; Motif = "" }
+    }
+    return @{ Valeur = "" ; Motif = ("ni " + $Nom + "Env ni " + $Nom + "Enc") }
+}
+
+function Read-ConfigDeploiement {
+    # Lit le fichier JSON du mode silencieux et rend les valeurs du worker. Les refus
+    # sont rendus, pas leves : le rapport doit exister meme quand rien ne part.
+    param([string]$Chemin)
+    $res = @{ Ok = $false ; Motif = "" ; Valeurs = $null }
+    if ([string]::IsNullOrWhiteSpace($Chemin)) { $res.Motif = "aucun fichier de configuration (-Config)" ; return $res }
+    if (-not (Test-Path -LiteralPath $Chemin)) { $res.Motif = ("fichier de configuration introuvable : " + $Chemin) ; return $res }
+    $j = $null
+    try { $j = [System.IO.File]::ReadAllText($Chemin) | ConvertFrom-Json }
+    catch { $res.Motif = ("JSON illisible (" + $Chemin + ") : " + $_.Exception.Message) ; return $res }
+    if ($null -eq $j) { $res.Motif = ("fichier de configuration vide : " + $Chemin) ; return $res }
+
+    # Un secret en clair dans un fichier qui part sur un partage serait lu par tous :
+    # il est refuse, et le motif nomme la cle qui le porte.
+    foreach ($nom in @("ProxyPassword", "ProductKey")) {
+        $clair = [string](Get-ProprieteConfig $j $nom)
+        if (-not [string]::IsNullOrWhiteSpace($clair)) {
+            $res.Motif = ("secret en clair refuse : " + $nom + " (utiliser " + $nom + "Env ou " + $nom + "Enc)")
+            return $res
+        }
+    }
+
+    $dossier = $LOG_FOLDER
+    $setup = [string](Get-ProprieteConfig $j "SetupExePath")
+    if ([string]::IsNullOrWhiteSpace($setup)) { $setup = Join-Path $ici "setup.exe" }
+    $langue = [string](Get-ProprieteConfig $j "Language")
+    if ([string]::IsNullOrWhiteSpace($langue)) { $langue = "fr-fr" }
+    $exclues = @(Get-ProprieteConfig $j "ExcludedApps")
+    if ($exclues.Count -eq 0) { $exclues = @($script:appsExclues) }
+    $depot = [bool](Get-ProprieteConfig $j "DepotEnabled")
+    # Meme regle que l'ecran : un depot de sources supprime le telechargement, donc le proxy.
+    $proxy = [bool](Get-ProprieteConfig $j "ProxyEnabled") -and -not $depot
+
+    # Adresse KMS : "hote" ou "hote:port", comme le champ de l'ecran.
+    $kms = [string](Get-ProprieteConfig $j "KmsServer")
+    $cible = $null
+    if (-not [string]::IsNullOrWhiteSpace($kms)) { $cible = Split-HotePort $kms 1688 }
+
+    # Secrets : seulement s'ils servent. Une cle demandee sans valeur fait refuser.
+    $cle = @{ Valeur = "" ; Motif = "" }
+    if ([bool](Get-ProprieteConfig $j "ApplyProductKey")) { $cle = Get-SecretDeConfig $j "ProductKey" }
+    $motDePasse = @{ Valeur = "" ; Motif = "" }
+    $utilisateurProxy = [string](Get-ProprieteConfig $j "ProxyUser")
+    if ($proxy -and -not [string]::IsNullOrWhiteSpace($utilisateurProxy)) { $motDePasse = Get-SecretDeConfig $j "ProxyPassword" }
+
+    $res.Ok = $true
+    $res.Valeurs = @{
+        ActivateOnly    = [bool](Get-ProprieteConfig $j "ActivateOnly")
+        SetupExePath    = $setup
+        InstallFolder   = $dossier
+        ActualXMLPath   = (Join-Path $dossier "OfficeConfig2024.xml")
+        UseCustomXML    = [bool](Get-ProprieteConfig $j "UseCustomXML")
+        CustomXMLPath   = [string](Get-ProprieteConfig $j "CustomXMLPath")
+        ExcludedApps    = @($exclues)
+        LanguageID      = $langue
+        RemoveOld       = [bool](Get-ProprieteConfig $j "RemoveOld")
+        DoInstall       = [bool](Get-ProprieteConfig $j "AutoInstall")
+        DoActivate      = [bool](Get-ProprieteConfig $j "AutoActivate")
+        KmsHost         = $(if ($null -ne $cible) { $cible.Hote } else { "" })
+        KmsPort         = $(if ($null -ne $cible) { [string]$cible.Port } else { "1688" })
+        KmsSecondary    = [string](Get-ProprieteConfig $j "KmsSecondaryServer")
+        ProxyEnabled    = $proxy
+        ProxyHost       = [string](Get-ProprieteConfig $j "ProxyHost")
+        ProxyPort       = [string](Get-ProprieteConfig $j "ProxyPort")
+        ProxyBypass     = [string](Get-ProprieteConfig $j "ProxyBypass")
+        DepotEnabled    = $depot
+        DepotPath       = [string](Get-ProprieteConfig $j "DepotPath")
+        SourcePath      = $dossier
+        LocalDataPath   = $dossier
+        ApplyProductKey = [bool](Get-ProprieteConfig $j "ApplyProductKey")
+        ProductKey      = [string]$cle.Valeur
+        DiskMinGB       = $script:disqueMinGo
+        # Hors worker : lus par le mode silencieux seulement.
+        ProxyUser       = $utilisateurProxy
+        ProxyPassword   = [string]$motDePasse.Valeur
+        MotifCle        = [string]$cle.Motif
+        MotifMotDePasse = [string]$motDePasse.Motif
+    }
+    return $res
+}
+
+# --- Lancement du worker : un seul chemin pour l'ecran et le mode silencieux ------
+#  La table partagee, le relais proxy et le runspace etaient ecrits deux fois : une
+#  retouche d'un cote laissait l'autre derriere.
+
+function New-SyncDeploiement {
+    # Table partagee avec le worker : seules les cles que l'appelant lit sont declarees,
+    # le worker ajoute celles qu'il ecrit lui-meme (PopupIcon, StepStartTime).
+    return [hashtable]::Synchronized(@{
+        LogQueue   = New-Object System.Collections.Concurrent.ConcurrentQueue[object]
+        StepState  = [string[]]@("waiting","waiting","waiting","waiting","waiting")
+        ActiveStep = -1
+        StatusText = "Demarrage..."
+        Done       = $false
+        HasError   = $false
+        FinalMsg   = ""
+        PopupTitle = ""
+        PopupMsg   = ""
+        ShowPopup  = $false
+    })
+}
+
+function Start-RelaisDeploiement {
+    # Proxy authentifie : relais loopback, seul moyen d'ajouter l'authentification pour
+    # le service Click-to-Run, qui tourne en LocalSystem. Le mot de passe ne quitte pas
+    # la memoire du processus. Le port est marque pour que le demarrage suivant sache
+    # reconnaitre un relais laisse en place.
+    param($Cfg, [string]$User, [string]$Password)
+    $relais = Start-AuthenticatedProxy -ProxyHost $Cfg.ProxyHost -ProxyPort $Cfg.ProxyPort -User $User -Password $Password
+    Save-RelayPort -Port ([int]$relais.Port)
+    $Cfg.ProxyHost = $relais.Host
+    $Cfg.ProxyPort = $relais.Port
+    $Cfg.ProxyRelay = $true
+    $Cfg.ProxyRelayTarget = $relais.Target
+    return $relais
+}
+
+function Start-RelaisSilencieux {
+    # Relais du mode silencieux : le meme que l'ecran, et un relais impossible est un
+    # refus (50), pas une installation sans proxy. Rend le code et le motif plutot que
+    # de les affecter : la suite peut ainsi exercer ce chemin hors de la fenetre.
+    param($Cfg, $Valeurs, $Contexte)
+    try {
+        if ($Cfg.ProxyEnabled -and $Valeurs.ProxyUser -ne "") {
+            $relais = Start-RelaisDeploiement -Cfg $Cfg -User $Valeurs.ProxyUser -Password $Valeurs.ProxyPassword
+            $Contexte.Proxy = $relais.Host + ":" + $relais.Port + " -> " + $relais.Target
+        } elseif ($Cfg.ProxyEnabled) {
+            $Contexte.Proxy = $Cfg.ProxyHost + ":" + $Cfg.ProxyPort
+        }
+        return @{ Code = 0 ; Motif = "" }
+    } catch {
+        return @{ Code = 50 ; Motif = ("relais proxy impossible : " + $_.Exception.Message) }
+    }
+}
+
+function Start-WorkerRunspace {
+    # Le worker tourne dans son propre runspace : il recoit la configuration et son texte
+    # par variables de session, jamais par argument. En cas d'echec, ce qui a ete ouvert
+    # est referme ici : l'appelant n'a pas de moitie de runspace a gerer.
+    param($Cfg, [string]$Texte)
+    $rs = $null ; $ps = $null
+    try {
+        $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+        $rs.Open()
+        $rs.SessionStateProxy.SetVariable("cfg", $Cfg)
+        $rs.SessionStateProxy.SetVariable("workerText", $Texte)
+        $ps = [System.Management.Automation.PowerShell]::Create()
+        $ps.Runspace = $rs
+        [void]$ps.AddScript({
+            Add-Type -AssemblyName System.Drawing
+            $worker = [scriptblock]::Create($workerText)
+            $e = [System.ComponentModel.DoWorkEventArgs]::new($cfg)
+            & $worker $null $e
+        })
+        $handle = $ps.BeginInvoke()
+        return @{ PS = $ps ; Runspace = $rs ; Handle = $handle }
+    } catch {
+        if ($null -ne $ps) { try { $ps.Dispose() } catch { } }
+        if ($null -ne $rs) { try { $rs.Close() ; $rs.Dispose() } catch { } }
+        throw
+    }
+}
+
+function Invoke-DeploiementSilencieux {
+    # Lance le worker du moteur sans fenetre, draine son journal, ecrit le rapport et
+    # rend le code de sortie. Le worker est celui de l'interactif : meme texte extrait,
+    # meme table partagee, aucun deroulement reecrit.
+    param($Cfg, [string]$Texte, [string]$CheminRapport, [string]$CheminJournal, $Contexte, [int]$DelaiMs = 200, [switch]$SansConsole)
+    $sync = $Cfg.SyncHash
+    $lignes = New-Object System.Collections.Generic.List[string]
+    $lancement = $null ; $inattendu = $false
+    try {
+        $lancement = Start-WorkerRunspace -Cfg $Cfg -Texte $Texte
+        $handle = $lancement.Handle
+        while (-not $sync.Done) {
+            $entree = $null
+            while ($sync.LogQueue.TryDequeue([ref]$entree)) {
+                $lignes.Add([string]$entree.Text)
+                if (-not $SansConsole) { Write-Host ([string]$entree.Text) }
+            }
+            # Un worker qui rend la main sans avoir rien conclu laisse Done a faux :
+            # c'est une erreur hors etapes, pas un succes muet, et le rapport doit
+            # dire pourquoi plutot que de rendre un message vide.
+            if ($handle.IsCompleted -and -not $sync.Done) {
+                $inattendu = $true
+                if ([string]::IsNullOrWhiteSpace([string]$sync.FinalMsg)) { $sync.FinalMsg = "worker termine sans conclure" }
+                break
+            }
+            Start-Sleep -Milliseconds $DelaiMs
+        }
+        $entree = $null
+        while ($sync.LogQueue.TryDequeue([ref]$entree)) {
+            $lignes.Add([string]$entree.Text)
+            if (-not $SansConsole) { Write-Host ([string]$entree.Text) }
+        }
+    } catch {
+        $inattendu = $true
+        $lignes.Add("[ERR]  Lancement silencieux impossible : " + $_.Exception.Message)
+        if ([string]::IsNullOrWhiteSpace([string]$sync.FinalMsg)) { $sync.FinalMsg = $_.Exception.Message }
+    } finally {
+        if ($null -ne $lancement) {
+            try { $lancement.PS.Dispose() } catch { }
+            try { $lancement.Runspace.Close() ; $lancement.Runspace.Dispose() } catch { }
+        }
+    }
+    $code = Get-CodeSortie $sync $inattendu
+    # Nom distinct de $Rapport : PowerShell ne distingue pas la casse, et le parametre
+    # -Rapport, type [string], convertirait le dictionnaire en son nom de type.
+    $rapportPoste = New-RapportPoste $Contexte $code ([string]$sync.FinalMsg) (New-EtapesRapport $sync) $CheminJournal
+    # Un chemin de rapport invalide ne doit pas transformer un resultat en exception :
+    # le code reste celui du deploiement, et la console dit que le rapport manque.
+    try { Write-RapportPoste $CheminRapport $rapportPoste }
+    catch { Write-Host ("[ERR] rapport non ecrit (" + $CheminRapport + ") : " + $_.Exception.Message) }
+    try { [System.IO.File]::WriteAllLines($CheminJournal, $lignes, (New-Object System.Text.UTF8Encoding($false))) } catch { }
+    return $code
 }
 
 function Write-LigneMoteur {
@@ -616,18 +1062,7 @@ function Start-Deploiement {
     $c = Update-PreVol $Fenetre
     # Table partagee avec le worker : seules les cles que l'ecran lit sont declarees, le
     # worker ajoute celles qu'il ecrit lui-meme (PopupIcon, StepStartTime).
-    $sync = [hashtable]::Synchronized(@{
-        LogQueue   = New-Object System.Collections.Concurrent.ConcurrentQueue[object]
-        StepState  = [string[]]@("waiting","waiting","waiting","waiting","waiting")
-        ActiveStep = -1
-        StatusText = "Demarrage..."
-        Done       = $false
-        HasError   = $false
-        FinalMsg   = ""
-        PopupTitle = ""
-        PopupMsg   = ""
-        ShowPopup  = $false
-    })
+    $sync = New-SyncDeploiement
 
     $rs = $null ; $ps = $null
     try {
@@ -638,15 +1073,9 @@ function Start-Deploiement {
         # l'adresse KMS sont celles que le pre-vol vient de constater. Une activation
         # seule ne passe ni par setup.exe, ni par un telechargement, ni par une
         # installation : ces exigences ne la concernent pas.
-        $refus = @()
-        if (-not $cfg.ActivateOnly) {
-            if (-not $c.SetupPresent) { $refus += ("setup.exe absent : " + $c.Setup) }
-            if (-not $c.AssezDEspace) { $refus += ($c.LibreGo.ToString([System.Globalization.CultureInfo]::InvariantCulture) + " Go libres, " + $script:disqueMinGo + " Go requis") }
-            if (-not $c.Os.Ok) { $refus += "Windows 10+ requis" }
-        }
-        if (-not $c.Admin) { $refus += "droits administrateur absents" }
-        if ($cfg.DoActivate -and $cfg.KmsHost -eq "") { $refus += "activation KMS demandee sans adresse de serveur" }
-        if ($cfg.UseCustomXML -and $cfg.CustomXMLPath -eq "") { $refus += "fichier XML choisi mais chemin vide" }
+        # Les memes refus qu'en silencieux, dans un seul endroit : ce qui part
+        # reellement est ce que le pre-vol vient de constater.
+        $refus = @(Get-RefusDeploiement $cfg $c)
         if ($refus.Count -gt 0) {
             Add-Journal $Fenetre "err" ("Deploiement refuse : " + ($refus -join " ; ") + ".")
             $Fenetre.FindName("StatutTexte").Text = "Deploiement refuse"
@@ -659,14 +1088,7 @@ function Start-Deploiement {
         # pour le service Click-to-Run, qui tourne en LocalSystem. Le mot de passe ne
         # quitte pas la memoire du processus et n'est jamais enregistre.
         if ($cfg.ProxyEnabled -and $Fenetre.FindName("ChampProxyUser").Text.Trim() -ne "") {
-            $relais = Start-AuthenticatedProxy -ProxyHost $cfg.ProxyHost -ProxyPort $cfg.ProxyPort `
-                        -User $Fenetre.FindName("ChampProxyUser").Text.Trim() `
-                        -Password $Fenetre.FindName("ChampProxyPass").Text
-            Save-RelayPort -Port ([int]$relais.Port)
-            $cfg.ProxyHost = $relais.Host
-            $cfg.ProxyPort = $relais.Port
-            $cfg.ProxyRelay = $true
-            $cfg.ProxyRelayTarget = $relais.Target
+            $relais = Start-RelaisDeploiement -Cfg $cfg -User $Fenetre.FindName("ChampProxyUser").Text.Trim() -Password $Fenetre.FindName("ChampProxyPass").Text
             Add-Journal $Fenetre "info" ("Proxy authentifie : relais local " + $relais.Host + ":" + $relais.Port + " vers " + $relais.Target + " (mot de passe non enregistre).")
         }
 
@@ -677,19 +1099,8 @@ function Start-Deploiement {
             return
         }
 
-        $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
-        $rs.Open()
-        $rs.SessionStateProxy.SetVariable("cfg", $cfg)
-        $rs.SessionStateProxy.SetVariable("workerText", $texte)
-        $ps = [System.Management.Automation.PowerShell]::Create()
-        $ps.Runspace = $rs
-        [void]$ps.AddScript({
-            Add-Type -AssemblyName System.Drawing
-            $worker = [scriptblock]::Create($workerText)
-            $e = [System.ComponentModel.DoWorkEventArgs]::new($cfg)
-            & $worker $null $e
-        })
-        $handle = $ps.BeginInvoke()
+        $lancement = Start-WorkerRunspace -Cfg $cfg -Texte $texte
+        $rs = $lancement.Runspace ; $ps = $lancement.PS ; $handle = $lancement.Handle
     } catch {
         # Rien n'a demarre : on referme ce qui a pu s'ouvrir avant de le dire.
         if ($null -ne $ps) { try { $ps.Dispose() } catch { } }
@@ -1301,6 +1712,53 @@ function Set-FocusCapture {
 # vraiment. Un nom present dans le XAML mais place dans un modele ou un dictionnaire de
 # ressources ne se resout pas a l'execution : c'est ce que le controle statique ne voit
 # pas. Le rapport est ecrit dans le fichier demande ; code de sortie 0 si tout se resout.
+# --- Verification du champ de cle : la vraie fenetre, hors ecran -------------
+# Le correctif ne se prouve pas en cherchant Add_GotFocus dans le texte : on ouvre la
+# fenetre livree, on met le focus sur le champ, on colle une cle et on relit ce que
+# Get-CleSaisie enverrait. -VerifierCle porte le fichier ou ecrire le constat.
+if ($VerifierCle -ne "") {
+    $lignesCle = New-Object System.Collections.Generic.List[string]
+    $okCle = $false
+    $fenetreCle = $null
+    try {
+        $fenetreCle = Import-Xaml "Principal.xaml"
+        Show-HorsEcran $fenetreCle
+        $null = $fenetreCle.Activate()
+        $fenetreCle.FindName("ChkCle").IsChecked = $true
+        Set-Actif $fenetreCle @("ChampCle") $true
+        Register-ChampCle $fenetreCle
+        $champVerif = $fenetreCle.FindName("ChampCle")
+        $exemple = [string]$champVerif.Text
+        $lignesCle.Add("exemple au depart=[" + $exemple + "]")
+        $focusPris = $champVerif.Focus()
+        $apresFocus = [string]$champVerif.Text
+        $lignesCle.Add("focus=" + [string]$focusPris + " texte apres focus=[" + $apresFocus + "]")
+        $cleCollee = "abcde-12345-fghij-67890-klmno"
+        $colle = $false
+        for ($essai = 0; $essai -lt 10 -and -not $colle; $essai++) {
+            try { [System.Windows.Clipboard]::SetText($cleCollee) ; $colle = $true }
+            catch { Start-Sleep -Milliseconds 100 }
+        }
+        if ($colle) { $champVerif.Paste() }
+        $apresCollage = [string]$champVerif.Text
+        $lignesCle.Add("colle=" + [string]$colle + " texte apres collage=[" + $apresCollage + "]")
+        $sansPlaceholder = Get-CleSaisie -Texte $apresCollage -Placeholder ""
+        $avecPlaceholder = Get-CleSaisie -Texte $apresCollage -Placeholder $script:clePlaceholder
+        $lignesCle.Add("Get-CleSaisie sans placeholder=[" + $sansPlaceholder + "]")
+        $lignesCle.Add("Get-CleSaisie avec placeholder=[" + $avecPlaceholder + "]")
+        $okCle = ($exemple -ne "") -and ($focusPris -eq $true) -and ($apresFocus -eq "") -and
+                 ($apresCollage -eq $cleCollee) -and ($sansPlaceholder -eq $cleCollee) -and ($avecPlaceholder -eq $cleCollee)
+    } catch {
+        $lignesCle.Add("ERREUR : " + $_.Exception.Message)
+    } finally {
+        if ($null -ne $fenetreCle) { try { $fenetreCle.Close() } catch { } }
+    }
+    $lignesCle.Add("verdict : " + $(if ($okCle) { "ok" } else { "echec" }))
+    [System.IO.File]::WriteAllLines($VerifierCle, $lignesCle, (New-Object System.Text.UTF8Encoding($false)))
+    if ($okCle) { exit 0 }
+    exit 1
+}
+
 if ($VerifierInterface -ne "") {
     if ($RapportInterface -eq "") { $RapportInterface = $VerifierInterface + ".rapport" }
     $fichiersInterface = @("Principal.xaml", "ReliquatProxy.xaml", "Applications.xaml", "Etats.xaml", "Styles.xaml")
@@ -1318,12 +1776,7 @@ if ($VerifierInterface -ne "") {
     }
     foreach ($w in $fenetres) {
         try {
-            $w.WindowStartupLocation = [System.Windows.WindowStartupLocation]::Manual
-            $w.Left = -32000
-            $w.Top = -32000
-            $w.ShowInTaskbar = $false
-            $w.Show()
-            $w.UpdateLayout()
+            Show-HorsEcran $w
         } catch {
             $lignesRapport.Add("OUVERTURE " + $w.GetType().Name + " : " + $_.Exception.Message)
         }
@@ -1347,6 +1800,24 @@ if ($VerifierInterface -ne "") {
     if (($resolus -eq $attendus.Count) -and ($attendus.Count -gt 0) -and ($charges.Count -eq $fichiersInterface.Count)) { exit 0 }
     exit 1
 }
+
+# --- Code du moteur, evalue une seule fois ---------------------------------
+# Le relais, le marqueur, le reliquat, le chiffrement et la configuration sont le code
+# du moteur : extraits par analyse syntaxique, ils sont evalues ici, jamais recopies.
+# L'ecran et le mode silencieux s'en servent tous les deux.
+$LOG_FOLDER = Get-ConstanteMoteur $CheminMoteur "LOG_FOLDER"
+# %APPDATA% manque dans certains contextes de service : un chemin vide ferait lever
+# Join-Path au demarrage, comme le chemin de script.
+$profilConfig = if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) { $env:APPDATA } else { [System.IO.Path]::GetTempPath() }
+$CONFIG_FILE = Join-Path $profilConfig "Office2024Deploy\config.json"
+. ([scriptblock]::Create((Get-DefinitionsMoteur $CheminMoteur -Noms @(
+    "Test-TcpPort",
+    "Get-RelayMarkerPath", "Save-RelayPort", "Get-RelayPort", "Clear-RelayPort", "Clear-RelayPortIfRestored",
+    "Get-ProxyRelaySink", "Get-WinHttpProxyAddress", "Get-InetProxyAddress",
+    "Test-ProxyRelayResidue", "Reset-ProxyRelayResidue",
+    "Start-ProxyRelay", "Stop-ProxyRelay", "Start-AuthenticatedProxy",
+    "Protect-SecretText", "Unprotect-SecretText", "Get-Config", "Save-Config"
+))))
 
 # --- Mode capture : rendu hors ecran, aucun affichage ----------------------
 if ($Capture -ne "") {
@@ -1372,6 +1843,83 @@ if ($Capture -ne "") {
     }
     Write-Host ("Capture ecrite : " + $Capture)
     return
+}
+
+# --- Mode silencieux : aucun affichage -------------------------------------
+# Meme deroulement que l'ecran (worker du moteur), mais la configuration vient du
+# fichier -Config, le journal va dans un fichier a cote du rapport, et le code de
+# sortie dit ce qui s'est passe. Rien n'est ecrit dans config.json : un deploiement
+# scripte ne doit pas modifier les reglages du poste.
+if ($Silent) {
+    $debut = Get-Date
+    $cheminRapport = if (-not [string]::IsNullOrWhiteSpace($Rapport)) { $Rapport }
+                     else { Join-Path $LOG_FOLDER ("rapport_" + $env:COMPUTERNAME + "_" + $debut.ToString("yyyyMMdd_HHmmss") + ".json") }
+    $cheminJournal = [System.IO.Path]::ChangeExtension($cheminRapport, ".log")
+    $contexte = @{ Version = $script:versionOutil ; Mode = "Deploiement" ; Debut = $debut ; Kms = "" ; Proxy = "" }
+    $code = 0
+    $motif = ""
+
+    $lecture = Read-ConfigDeploiement $Config
+    if (-not $lecture.Ok) {
+        $code = 10 ; $motif = $lecture.Motif
+    } else {
+        $v = $lecture.Valeurs
+        $contexte.Mode = if ($v.ActivateOnly) { "ActivationSeule" } else { "Deploiement" }
+        $contexte.Kms = if ($v.KmsHost -ne "") { $v.KmsHost + ":" + $v.KmsPort } else { "" }
+        # Un secret demande mais absent fait refuser avant tout depart, en le nommant.
+        if ($v.ApplyProductKey -and $v.ProductKey -eq "") {
+            $code = 10 ; $motif = "cle produit demandee mais " + $v.MotifCle
+        } elseif ($v.ProxyEnabled -and $v.ProxyUser -ne "" -and $v.ProxyPassword -eq "") {
+            $code = 10 ; $motif = "proxy authentifie sans mot de passe : " + $v.MotifMotDePasse
+        }
+    }
+
+    if ($code -eq 0) {
+        # Meme table partagee que l'ecran : une seule construction, un seul jeu de cles.
+        $sync = New-SyncDeploiement
+        $cfg = New-CfgDeploiement $sync $v
+        $prevol = Get-PreVol -SetupSaisi $cfg.SetupExePath `
+                            -KmsSaisi $(if ($cfg.KmsHost -ne "") { $cfg.KmsHost + ":" + $cfg.KmsPort } else { "" }) `
+                            -KmsActif $cfg.DoActivate
+        $refus = @(Get-RefusDeploiement $cfg $prevol)
+        if ($refus.Count -gt 0) { $code = 10 ; $motif = "deploiement refuse : " + ($refus -join " ; ") }
+    }
+
+    if ($code -eq 0) {
+        # Proxy authentifie : meme relais que l'ecran, meme marqueur de port. Un relais
+        # impossible est un refus (50), pas une installation sans proxy.
+        $relaisSil = Start-RelaisSilencieux -Cfg $cfg -Valeurs $v -Contexte $contexte
+        if ($relaisSil.Code -ne 0) { $code = $relaisSil.Code ; $motif = $relaisSil.Motif }
+    }
+
+    if ($code -eq 0) {
+        try { $texteWorker = Get-ScriptblockMoteur $CheminMoteur }
+        catch { $code = 10 ; $motif = $_.Exception.Message }
+    }
+
+    if ($code -eq 0) {
+        $code = Invoke-DeploiementSilencieux -Cfg $cfg -Texte $texteWorker -CheminRapport $cheminRapport `
+                    -CheminJournal $cheminJournal -Contexte $contexte
+        $motif = [string]$sync.FinalMsg
+    } else {
+        # Meme precaution que dans Invoke-DeploiementSilencieux : $rapport est le
+        # parametre -Rapport du script, type [string].
+        $rapportPoste = New-RapportPoste $contexte $code $motif (New-EtapesRapport $null) $cheminJournal
+        try { Write-RapportPoste $cheminRapport $rapportPoste }
+        catch { Write-Host ("[ERR] rapport non ecrit (" + $cheminRapport + ") : " + $_.Exception.Message) }
+        try { [System.IO.File]::WriteAllLines($cheminJournal, @(("REFUS (" + $code + ") : " + $motif)), (New-Object System.Text.UTF8Encoding($false))) } catch { }
+    }
+
+    # Le worker a restaure la configuration du poste avant de rendre la main : le relais
+    # n'a plus lieu d'ecouter, et le marqueur ne sert plus que si une couche pointe dessus.
+    Stop-ProxyRelay
+    Clear-RelayPortIfRestored
+    # Le motif est ecrit sur la console : c'est ce qu'un journal de GPO conserve, et
+    # c'est la premiere chose qu'on lit quand un poste ressort en code 10.
+    if ($motif -ne "") { Write-Host ("Message : " + $motif) }
+    Write-Host ("Rapport : " + $cheminRapport)
+    Write-Host ("Code de sortie : " + $code)
+    exit $code
 }
 
 # --- Mode interactif -------------------------------------------------------
@@ -1405,18 +1953,11 @@ foreach ($n in @("ChkDepot", "ChkProxy", "ChkKms", "ChkCle", "RadXmlAuto", "RadX
     $win.FindName($n).Add_Click({ Update-Options $win })
 }
 Update-Options $win
-# Le relais, le marqueur, le reliquat et le chiffrement sont le code du moteur :
-# extraits par analyse syntaxique, ils sont evalues ici, jamais recopies.
-$LOG_FOLDER = Get-ConstanteMoteur $CheminMoteur "LOG_FOLDER"
-$CONFIG_FILE = Join-Path $env:APPDATA "Office2024Deploy\config.json"
-. ([scriptblock]::Create((Get-DefinitionsMoteur $CheminMoteur -Noms @(
-    "Test-TcpPort",
-    "Get-RelayMarkerPath", "Save-RelayPort", "Get-RelayPort", "Clear-RelayPort", "Clear-RelayPortIfRestored",
-    "Get-ProxyRelaySink", "Get-WinHttpProxyAddress", "Get-InetProxyAddress",
-    "Test-ProxyRelayResidue", "Reset-ProxyRelayResidue",
-    "Start-ProxyRelay", "Stop-ProxyRelay", "Start-AuthenticatedProxy",
-    "Protect-SecretText", "Unprotect-SecretText", "Get-Config", "Save-Config"
-))))
+
+# Le champ de cle affiche un exemple tant qu'aucune valeur n'est saisie : le cablage
+# est le meme que celui verifie hors ecran par -VerifierCle.
+Register-ChampCle $win
+
 # Reglages du poste, puis mesures : l'ecran ne montre que ce qui a ete constate sur
 # les valeurs qui partiront reellement.
 Import-ConfigPoste $win

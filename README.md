@@ -28,7 +28,9 @@ Le dossier extrait contient tout : le programme, ses fenêtres (`Maquette\`), le
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `Install-Office2024-KMS.ps1` | Moteur : déroulé de déploiement extrait par l'EXE ; son interface WinForms historique reste exécutable telle quelle |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (124 cas, `-Fast` pour la section 1 seule) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (159 cas, `-Fast` pour la section 1 seule) |
+| `version.txt` | Version de l'outil, source unique : le badge, le README, le script et `Compare-ExeRecompilation.ps1` s'y comparent |
+| `Set-Version.ps1` | Vérifie ou écrit cette version partout, et refuse si un emplacement diverge |
 | `New-Livraison.ps1` | Construit `Livraison.zip` en liste blanche, avec `SHA256SUMS` |
 | `Verifier-Livraison.ps1` | Vérificateur livré dans le ZIP : à lancer sur un poste, sans git |
 | `.githooks/pre-commit` | Contrôle rapide de l'index avant chaque commit, refuse l'EXE désynchronisé |
@@ -95,7 +97,7 @@ pointé sur ce relais, qui n'est pour Office qu'un proxy ordinaire. Le relais ne
 temps du déploiement et le mot de passe n'est **jamais** écrit sur disque : il faut le
 ressaisir à chaque lancement. Seule l'authentification **Basic** est prise en charge ; un
 proxy qui n'accepte que NTLM ou Kerberos reste hors de portée, d'où le mode « Dépôt de
-sources ». Si le programme est tué pendant le téléchargement, avant la restauration, le poste
+sources » (voir *Proxy d'établissement : Basic oui, NTLM et Kerberos non*). Si le programme est tué pendant le téléchargement, avant la restauration, le poste
 garderait le relais loopback dans **deux** configurations : WinHTTP (machine, ce que lit
 Office) et le proxy de session (`HKCU\…\Internet Settings`, `ProxyEnable=1`, ce que lit
 le navigateur). Le port du relais est donc **enregistré au lancement**
@@ -107,6 +109,157 @@ loopback, et une couche qui n'est pas en cause n'est pas modifiée. La décision
 dans le journal, le marqueur est effacé dès que plus aucune couche ne pointe dessus, et
 une fermeture normale restaure tout toute seule.
 
+## Banc de preuve : proxy authentifié de bout en bout
+
+`Banc-ProxyAuthentifie.ps1` monte la chaîne complète sur le poste, sans rien installer :
+un **vrai proxy amont** local (processus à lui, Basic exigé, `407` sans identifiants,
+journal par requête), le relais de l'outil devant, et une cible locale atteinte à travers
+le tunnel.
+
+```powershell
+powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Banc-ProxyAuthentifie.ps1
+```
+
+Six preuves, hors ligne, en une seconde :
+
+- le client parle au relais **sans identifiants**, et le proxy voit `auth=oui user=…` ;
+- un mauvais mot de passe remonte un **407** au client, pas un tunnel muet ;
+- une requête **HTTP en clair à URL absolue** traverse la chaîne — c'est la forme que le
+  CDN Office utilise pour les `.cab` du téléchargement ;
+- un proxy qui n'offre que **NTLM** laisse remonter son `407` et son `Proxy-Authenticate`,
+  ce qui permet de nommer le schéma au lieu d'accuser le mot de passe ;
+- une connexion que le client voudrait **réutiliser** est fermée proprement
+  (`Connection: close`) : la requête suivante repart sur une connexion neuve, authentifiée
+  elle aussi, au lieu de partir sans en-tête et de prendre un 407 ;
+- une réponse dont l'en-tête est **tronqué** fait fermer la connexion : le relais ne
+  relaie jamais une réponse partielle.
+
+Le journal du proxy est imprimé en regard des résultats, et le rapport JSON (`-Rapport`)
+reprend les mêmes lignes.
+
+### Le téléchargement ODT réel
+
+```powershell
+... -Odt -WinInet -SecondesOdt 300
+```
+
+Le banc règle alors le proxy de session et les variables d'environnement sur le relais,
+lance un vrai `setup.exe /download` borné dans le temps, puis relit le journal : des lignes
+`CONNECT officeclient.microsoft.com:443` et `GET http://…/…cab auth=oui` montrent que
+Click-to-Run passe par le relais. Sans `-WinInet`, seul l'environnement est réglé. WinHTTP
+demande les droits administrateur : sans eux, ODT peut ignorer le relais, et le banc le dit
+au lieu de le masquer.
+
+Le rapport va plus loin que « le flux passe ». Pour chaque `.cab` écrit dans les sources, il
+compare la taille du fichier au `Content-Length` annoncé par le CDN — ou au total du
+`Content-Range` quand ODT télécharge par plages, ce qui est le cas des gros fichiers. Un
+fichier n'est déclaré `Complet` que si les deux coïncident, et `Odt.Ok` exige au moins un
+`.cab` complet : un flux qui traverse le relais sans qu'aucun fichier n'arrive entier ne
+passe plus pour une réussite. Un `.cab` servi en HTTPS (donc dans un tunnel) n'annonce pas
+sa taille : il est marqué « inconnue », jamais « complet ».
+
+Ce que ce banc a appris, et qui est corrigé : le relais ne traitait que `CONNECT`. Or ODT
+télécharge les `.cab` en **HTTP clair**, sous forme de requête à URL absolue ; le relais les
+transformait en `CONNECT` et le proxy amont répondait `400`. Il transmet désormais ces
+requêtes telles quelles, en ajoutant l'en-tête d'authentification.
+
+Second défaut trouvé de la même façon : l'en-tête n'était ajouté qu'à la **première**
+requête d'une connexion. Si le client réutilisait la connexion, la deuxième partait sans
+`Proxy-Authorization` et prenait un `407`. Le relais traite maintenant **une requête par
+connexion amont** et annonce `Connection: close` aux deux bouts : le client rouvre, et la
+connexion neuve est authentifiée. Un parseur HTTP pour réinjecter l'en-tête à chaque
+message aurait coûté bien plus cher, pour un trafic fait de `GET` de fichiers.
+
+## Proxy d'établissement : Basic oui, NTLM et Kerberos non
+
+Décision prise avant la livraison, et assumée noir sur blanc.
+
+| Ce que le proxy exige | Ce que l'outil fait | Statut |
+| --- | --- | --- |
+| Aucune authentification | WinHTTP et WinINet pointés sur le proxy | pris en charge |
+| **Basic** | relais local qui ajoute `Proxy-Authorization` | pris en charge, prouvé par le banc |
+| **NTLM** | rien : le relais ne négocie pas | **non pris en charge, annoncé** |
+| **Kerberos** | rien : idem | **non pris en charge, annoncé** |
+
+Pourquoi pas NTLM : c'est un défi en plusieurs messages, lié à la connexion TCP, et .NET
+Framework (celui de PowerShell 5.1) n'expose aucune API qui produise directement un en-tête
+`Proxy-Authorization`. Il faudrait appeler SSPI (`secur32.dll`) à la main — de l'ordre de
+300 à 450 lignes d'interop dans le bloc `Add-Type`, plus un banc NTLM réel (domaine,
+contrôleur, proxy qui négocie) que ce poste n'a pas. Livrer du code d'authentification non
+testé à un lycée coûte plus cher que de nommer la limite : ce qui n'est pas vérifiable ici
+ne part pas.
+
+Ce que l'outil fait à la place, et qui est testé : quand le proxy répond `407` sans
+proposer `Basic`, le test du proxy et le déploiement silencieux **nomment les schémas
+annoncés** (`Proxy-Authenticate`) au lieu d'accuser le mot de passe, et donnent les trois
+issues, dans l'ordre :
+
+1. **Dépôt de sources** — télécharger une fois les sources, puis installer depuis le
+   réseau pédagogique : plus aucune authentification proxy en jeu (recommandé) ;
+2. faire ouvrir côté proxy les URL Click-to-Run (`officecdn.microsoft.com`,
+   `config.office.com`) sans mot de passe — la recommandation habituelle pour ODT ;
+3. faire déclarer un compte de service accepté en **Basic** par le proxy.
+
+Aucune de ces issues ne demande d'élévation supplémentaire, et la première existe déjà.
+
+## Déploiement sans surveillance (GPO, PsExec)
+
+L'outil sait aussi tourner **sans fenêtre**, pour équiper un parc depuis un script. Le
+déroulement est celui de l'écran — le même worker du moteur — mais les réglages viennent
+d'un fichier JSON et le résultat part dans un rapport.
+
+```powershell
+Install-Office2024-KMS.exe -Silent -Config .\poste.json -Rapport .\rapport_PC042.json
+```
+
+`-Rapport` est facultatif : sans lui, le rapport s'écrit dans le dossier des journaux,
+sous `rapport_<poste>_<date>.json`, avec le journal du déploiement à côté (même nom, en
+`.log`). Rien n'est écrit dans `config.json` : un déploiement scripté ne modifie pas les
+réglages du poste.
+
+### Le fichier de configuration
+
+Mêmes clés que `config.json`, plus `ActivateOnly` pour rejouer une activation seule :
+
+| Clé | Rôle |
+| --- | --- |
+| `SetupExePath` | `setup.exe` (par défaut, à côté de l'EXE) |
+| `KmsServer` | `hote` ou `hote:port` |
+| `KmsSecondaryServer` | serveur de secours |
+| `Language` | langue ODT (`fr-fr` par défaut) |
+| `RemoveOld` | désinstaller l'ancienne version |
+| `AutoInstall` / `AutoActivate` | installer / activer |
+| `ActivateOnly` | activation seule, sans installation |
+| `ExcludedApps` | identifiants ODT exclus |
+| `UseCustomXML` / `CustomXMLPath` | XML fourni au lieu du XML généré |
+| `DepotEnabled` / `DepotPath` | sources locales au lieu du téléchargement |
+| `ProxyEnabled`, `ProxyHost`, `ProxyPort`, `ProxyBypass`, `ProxyUser` | proxy |
+| `ApplyProductKey` | appliquer une clé avant l'activation |
+
+### Les secrets ne sont jamais dans le fichier
+
+Un mot de passe ou une clé en clair est **refusé** (code 10) : ce fichier part souvent sur
+un partage. Deux formes sont acceptées, une par secret :
+
+- `ProxyPasswordEnv` / `ProductKeyEnv` : nom d'une variable d'environnement, que la GPO
+  renseigne avant l'appel ;
+- `ProxyPasswordEnc` / `ProductKeyEnc` : valeur chiffrée en DPAPI sur **ce** poste.
+
+### Codes de sortie
+
+| Code | Sens |
+| --- | --- |
+| 0 | déploiement réussi |
+| 10 | configuration refusée (fichier, secret, pré-vol) |
+| 20 | sources (téléchargement ou copie du dépôt) |
+| 30 | installation, y compris la désinstallation de l'ancienne version |
+| 40 | activation KMS |
+| 50 | relais proxy impossible |
+| 60 | erreur hors étapes |
+
+Un refus écrit quand même son rapport : un poste qui n'a pas démarré laisse une trace
+lisible, avec ses cinq étapes en attente.
+
 ## Compilation de l'EXE
 
 ```powershell
@@ -117,10 +270,29 @@ Invoke-PS2EXE -InputFile "Apercu-Maquette.ps1" `
               -Product "InstallOffice" `
               -Description "Installation Office LTSC 2024 et activation KMS" `
               -Company "Lycee Loritz" `
-              -Version "8.4.1.0"
+              -Version "8.5.0.0"
 ```
 
 (`Install-Module ps2exe` si le module est absent.)
+
+### Version : `version.txt` est la source unique
+
+Le badge de la fenêtre, le README, `Compare-ExeRecompilation.ps1` et la constante du
+script ne peuvent pas lire un fichier à l'exécution (XAML statique, texte, commande
+PS2EXE). `version.txt` porte donc la version, et `Set-Version.ps1` tient les copies
+alignées :
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Set-Version.ps1            # vérifie
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Set-Version.ps1 -Version <N.N.N.N>
+```
+
+Sans argument, le script vérifie que tous les emplacements valent `version.txt` et sort en
+erreur en nommant le fichier, la ligne et la valeur trouvée. Avec `-Version`, il refait
+cette vérification **avant** d'écrire : si un seul emplacement diverge, rien n'est écrit.
+Le test lit `version.txt` — il ne doit contenir aucune version en dur, et le script refuse
+s'il en trouve une. Après un bump, l'EXE est à recompiler et les captures à régénérer (le
+script rappelle les deux commandes).
 
 La CI recompile ce script et compare le résultat au binaire committé : le script embarqué
 doit être identique, et les propriétés du fichier (titre, produit, société, version,
@@ -167,7 +339,7 @@ conforme.
 Empreinte du binaire livré, publiée ici pour être comparée sans git :
 
 ```
-SHA256 Install-Office2024-KMS.exe = B1979E1103D3FB0384B43D74ECE20DB3B75CF7158D62FBE63C0B2102B4A071D5
+SHA256 Install-Office2024-KMS.exe = 801A94AE1E1868633784BF274580F626AE7A343CA0318D9E48B4721FE6912F46
 ```
 
 La suite compare cette ligne au fichier livré : une recompilation sans mise à jour du
@@ -190,7 +362,7 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps
 embarqué, propriétés de l'EXE, présence des fichiers livrés avec lui et interface ouverte
 hors écran avec chaque nom résolu — soit quelques secondes : c'est exactement ce que lance
 le hook avant chaque commit. Sans commutateur, la
-suite complète (124 cas) tourne, comme sur GitHub.
+suite complète (159 cas) tourne, comme sur GitHub.
 
 Le **dernier contrôle** de la suite relit ce README, y cherche toutes les mentions
 « N cas » et exige qu'elles valent le total réellement exécuté : un cas ajouté ou retiré
@@ -231,7 +403,7 @@ message **RECOMPILER** (section « Compilation de l'EXE »). Si le binaire n'exp
 script en clair (format compressé ou construction différente), l'échec dit que l'empreinte
 n'est **pas vérifiable** — sans conseil de recompilation, qui serait alors trompeur.
 
-Les autres propriétés du binaire livré sont contrôlées aussi : version `8.4.1.0`, titre
+Les autres propriétés du binaire livré sont contrôlées aussi : version `8.5.0.0`, titre
 `Deploiement Office 2024`, produit `InstallOffice`, société `Lycee Loritz` et manifeste
 `requireAdministrator`, plus `OriginalFilename` et `InternalName`, qui doivent porter le nom
 du fichier livré. Chaque écart nomme la valeur trouvée, celle attendue et l'option
@@ -314,7 +486,7 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   ralenti ; `git commit --no-verify` reste possible pour un cas exceptionnel, et se voit
   dans l'historique.
 - **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la suite
-  **complète** (124 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
+  **complète** (159 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
   request : un EXE oublié ou compilé autrement fait échouer la vérification côté serveur,
   même si le hook local n'était pas installé — et sans rien imposer à la boucle locale.
 - **et la recompilation y est vérifiée aussi** : un job à part installe `ps2exe`,

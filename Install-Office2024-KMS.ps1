@@ -215,7 +215,7 @@ function Test-TcpPort {
 function Test-ProxyConnect {
     param([string]$ProxyHost,[int]$ProxyPort,[string]$TargetHost,[int]$TargetPort,[int]$TimeoutMs = 6000)
 
-    $res = @{ Name = "${TargetHost}:${TargetPort}" ; OK = $false ; Code = 0 ; Detail = "" }
+    $res = @{ Name = "${TargetHost}:${TargetPort}" ; OK = $false ; Code = 0 ; Detail = "" ; Schemes = "" }
     $tcp = $null
     try {
         $tcp = New-Object System.Net.Sockets.TcpClient
@@ -243,6 +243,24 @@ function Test-ProxyConnect {
             $res.Detail = "reponse proxy : $($line.Trim())"
         } else {
             $res.Detail = "reponse proxy inattendue : $line"
+        }
+        # Sur un refus, les en-tetes disent quels schemas le proxy accepte. Sans cette
+        # lecture, un proxy qui n'offre que NTLM se confond avec un mot de passe faux.
+        if ($res.Code -ge 400) {
+            $schemes = New-Object System.Collections.ArrayList
+            try {
+                for ($i = 0; $i -lt 20; $i++) {
+                    $h = $sr.ReadLine()
+                    if ($null -eq $h -or $h -eq "") { break }
+                    if ($h -match '^(?i)Proxy-Authenticate:\s*(.+)$') {
+                        $val = $matches[1]
+                        foreach ($m in [regex]::Matches($val, '(?i)\b(Basic|NTLM|Negotiate|Kerberos|Digest)\b')) {
+                            if (-not $schemes.Contains($m.Value)) { [void]$schemes.Add($m.Value) }
+                        }
+                    }
+                }
+            } catch { }
+            $res.Schemes = ($schemes -join ", ")
         }
     } catch {
         $res.Detail = $_.Exception.Message
@@ -421,6 +439,7 @@ function Start-ProxyRelay {
     param([string]$UpstreamHost, [int]$UpstreamPort, [string]$User, [string]$Password)
     $code = @'
 using System;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -479,19 +498,55 @@ public class OfficeProxyRelay
         }
     }
 
-    // Le CDN Office est en HTTPS : chaque connexion commence par un CONNECT, dont
-    // la cible est relayee telle quelle, authentification en plus.
+    // Deux formes de trafic, et les deux comptent : les flux HTTPS passent par un
+    // CONNECT, mais le CDN Office sert les .cab du telechargement en HTTP clair, sous
+    // la forme d'une requete a URL absolue. La seconde forme a ete vue sur un vrai
+    // setup.exe /download (Banc-ProxyAuthentifie.ps1) : la transformer en CONNECT la
+    // casse (400), donc elle est transmise telle quelle, authentification en plus.
     private void Serve(TcpClient client)
     {
         TcpClient up = null;
         try
         {
+            // Une lecture d'en-tete bloquee n'immobilise pas le thread pour toujours :
+            // un client muet, ou un amont qui ne repond pas, est coupe au bout de 30 s.
+            // Les copies de corps, elles, sont asynchrones et ne sont pas bornees.
+            client.ReceiveTimeout = 30000;
             NetworkStream cs = client.GetStream();
-            string[] parts = LireEntete(cs).Split(' ');
+            string entete = LireEntete(cs);
+            string[] parts = entete.Split('\n')[0].TrimEnd('\r').Split(' ');
+            string methode = parts.Length > 0 ? parts[0] : "";
             string cible = parts.Length > 1 ? parts[1] : "";
+            bool estConnect = string.Equals(methode, "CONNECT", StringComparison.OrdinalIgnoreCase);
+
             up = new TcpClient();
+            up.ReceiveTimeout = 30000;
             up.Connect(_upHost, _upPort);
             NetworkStream us = up.GetStream();
+
+            if (!estConnect)
+            {
+                // Une seule requete par connexion amont. L'en-tete n'est ajoute qu'ici :
+                // si la connexion restait ouverte, la requete suivante du client partirait
+                // sans authentification et prendrait un 407. On annonce donc la fermeture
+                // aux deux bouts, et le client rouvre une connexion, qu'on authentifie.
+                StringBuilder rq = new StringBuilder(ReecrireEntete(entete, true));
+                if (_auth != null) { rq.Append("Proxy-Authorization: ").Append(_auth).Append("\r\n"); }
+                rq.Append("Connection: close\r\n\r\n");
+                byte[] rb0 = Encoding.ASCII.GetBytes(rq.ToString());
+                us.Write(rb0, 0, rb0.Length);
+                us.Flush();
+                Interlocked.Increment(ref _tunnels);
+
+                // Le corps eventuel du client part en parallele : lire la reponse d'abord
+                // bloquerait un envoi qui attend ce corps.
+                Task envoi = cs.CopyToAsync(us);
+                string rep = LireEntete(us);
+                Ecrire(cs, ReecrireEntete(rep, false) + "Connection: close\r\n\r\n");
+                Task.WaitAny(envoi, us.CopyToAsync(cs));
+                return;
+            }
+
             string req = "CONNECT " + cible + " HTTP/1.1\r\nHost: " + cible + "\r\n";
             if (_auth != null) { req += "Proxy-Authorization: " + _auth + "\r\n"; }
             req += "\r\n";
@@ -512,8 +567,10 @@ public class OfficeProxyRelay
             Interlocked.Increment(ref _tunnels);
             Ecrire(cs, "HTTP/1.1 200 Connection established\r\n\r\n");
             // Deux copies asynchrones suffisent : aucune necessite de thread dedie.
-            Task t = cs.CopyToAsync(us);
-            Task.WaitAny(t, us.CopyToAsync(cs));
+            // Nom distinct de la variable de boucle : C# refuse une portee parente qui
+            // reprend un nom deja utilise dans une portee enfant.
+            Task copie = cs.CopyToAsync(us);
+            Task.WaitAny(copie, us.CopyToAsync(cs));
         }
         catch { Interlocked.Increment(ref _erreurs); }
         finally
@@ -523,6 +580,28 @@ public class OfficeProxyRelay
         }
     }
 
+    // Rejoue un en-tete recu en retirant les champs qui n'ont plus de sens ici
+    // (Connection, Proxy-*) et, pour une requete, l'eventuelle authentification du
+    // client : c'est la notre qui part. Les lignes vides sont ecartees, l'appelant
+    // ajoute la sienne.
+    private static string ReecrireEntete(string entete, bool requete)
+    {
+        StringBuilder sb = new StringBuilder();
+        foreach (string l in entete.Split('\n'))
+        {
+            string t = l.TrimEnd('\r');
+            if (t.Length == 0) { continue; }
+            if (t.StartsWith("Connection:", StringComparison.OrdinalIgnoreCase)) { continue; }
+            if (t.StartsWith("Proxy-Connection:", StringComparison.OrdinalIgnoreCase)) { continue; }
+            if (requete && t.StartsWith("Proxy-Authorization:", StringComparison.OrdinalIgnoreCase)) { continue; }
+            sb.Append(t).Append("\r\n");
+        }
+        return sb.ToString();
+    }
+
+    // Lit jusqu'a la ligne vide incluse. Un en-tete tronque (plafond atteint ou pair
+    // qui ferme) est une erreur : relayer un en-tete partiel donnerait au client une
+    // reponse coupee, plus difficile a diagnostiquer qu'une connexion fermee.
     private static string LireEntete(NetworkStream s)
     {
         StringBuilder sb = new StringBuilder();
@@ -531,9 +610,9 @@ public class OfficeProxyRelay
         {
             if (s.Read(un, 0, 1) <= 0) { break; }
             sb.Append((char)un[0]);
-            if (sb.Length >= 4 && sb[sb.Length - 1] == '\n' && sb[sb.Length - 3] == '\n') { break; }
+            if (sb.Length >= 4 && sb[sb.Length - 1] == '\n' && sb[sb.Length - 3] == '\n') { return sb.ToString(); }
         }
-        return sb.ToString();
+        throw new IOException("entete incomplet");
     }
 
     private static void Ecrire(NetworkStream s, string texte)
@@ -1615,7 +1694,9 @@ $proxyTestBtn.Add_Click({
             $mark = if ($r.OK) { "OK " } else { "ERR" }
             $lines += "[$mark] $($r.Name)  -  $($r.Detail)"
             if ($r.Code -eq 407) {
-                if ($null -ne $relaisTest) {
+                if (($r.Schemes -ne "") -and ($r.Schemes -notmatch '(?i)Basic')) {
+                    $lines += "       -> 407 : le proxy ne propose pas Basic (schemas annonces : $($r.Schemes)). Le relais ne peut pas repondre a NTLM/Kerberos : utilisez le 'Depot de sources', ou faites ouvrir les URL Click-to-Run cote proxy, ou faites declarer un compte Basic."
+                } elseif ($null -ne $relaisTest) {
                     $lines += "       -> 407 : identifiants refuses par le proxy. Verifiez l'utilisateur et le mot de passe ci-dessus."
                 } else {
                     $lines += "       -> 407 : le proxy exige une authentification. Renseignez l'utilisateur et le mot de passe ci-dessus : un relais local les transmet au proxy (le service Click-to-Run ne peut pas s'authentifier lui-meme)."
@@ -2313,7 +2394,7 @@ $script:BgDoWorkHandler = {
     #     Copie volontaire de Test-ProxyConnect (voir la remarque cote interface).
     function bg_TestProxyConnect {
         param([string]$ProxyHost,[int]$ProxyPort,[string]$TargetHost,[int]$TargetPort,[int]$TimeoutMs = 8000)
-        $res = @{ Name = "${TargetHost}:${TargetPort}" ; OK = $false ; Code = 0 ; Detail = "" }
+        $res = @{ Name = "${TargetHost}:${TargetPort}" ; OK = $false ; Code = 0 ; Detail = "" ; Schemes = "" }
         $tcp = $null
         try {
             $tcp = New-Object System.Net.Sockets.TcpClient
@@ -2335,6 +2416,24 @@ $script:BgDoWorkHandler = {
                 $res.OK = ($res.Code -ge 200 -and $res.Code -lt 300)
                 $res.Detail = $line.Trim()
             } else { $res.Detail = "reponse inattendue : $line" }
+            # Meme lecture que Test-ProxyConnect : le schema annonce distingue un proxy
+            # NTLM/Kerberos d'un mot de passe faux.
+            if ($res.Code -ge 400) {
+                $schemes = New-Object System.Collections.ArrayList
+                try {
+                    for ($i = 0; $i -lt 20; $i++) {
+                        $h = $sr.ReadLine()
+                        if ($null -eq $h -or $h -eq "") { break }
+                        if ($h -match '^(?i)Proxy-Authenticate:\s*(.+)$') {
+                            $val = $matches[1]
+                            foreach ($m in [regex]::Matches($val, '(?i)\b(Basic|NTLM|Negotiate|Kerberos|Digest)\b')) {
+                                if (-not $schemes.Contains($m.Value)) { [void]$schemes.Add($m.Value) }
+                            }
+                        }
+                    }
+                } catch { }
+                $res.Schemes = ($schemes -join ", ")
+            }
         } catch { $res.Detail = $_.Exception.Message }
         finally { if ($tcp) { try { $tcp.Close() } catch {} } }
         return $res
@@ -2580,6 +2679,12 @@ $script:BgDoWorkHandler = {
                         }
                     }
                     if ($okCount -eq 0) {
+                        # Un 407 ne dit pas pourquoi : les schemas annonces, si.
+                        $schemesVus = (@($checks | Where-Object { $_.Code -eq 407 -and $_.Schemes } | ForEach-Object { $_.Schemes }) -join ", ")
+                        $basicAbsent = ($schemesVus -ne "") -and ($schemesVus -notmatch '(?i)Basic')
+                        if ($authReq -and $basicAbsent) {
+                            throw "Le proxy ${proxyHost}:${proxyPort} ne propose pas Basic (schemas annonces : $schemesVus). Le relais local ne peut pas repondre a NTLM ni a Kerberos, et Click-to-Run tourne en LocalSystem : aucun mot de passe ne peut lui etre transmis. Trois issues, dans l'ordre : 1) le mode 'Depot de sources' (recommande) ; 2) faire ouvrir cote proxy les URL Click-to-Run sans mot de passe ; 3) faire declarer un compte de service accepte en Basic."
+                        }
                         if ($authReq) {
                             if ($cfg.ProxyRelay) {
                                 throw "Le proxy $($cfg.ProxyRelayTarget) refuse les identifiants fournis (407), malgre le relais local. Verifiez l'utilisateur et le mot de passe du proxy dans Options : le mot de passe n'est jamais enregistre, il faut le ressaisir a chaque lancement. Si le proxy exige NTLM ou Kerberos (et non Basic), le relais ne suffit pas -> utilisez le mode 'Depot de sources'."

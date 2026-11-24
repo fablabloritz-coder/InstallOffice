@@ -39,7 +39,7 @@ $options = @{
     Product     = "InstallOffice"
     Description = "Installation Office LTSC 2024 et activation KMS"
     Company     = "Lycee Loritz"
-    Version     = "8.4.1.0"
+    Version     = "8.5.0.0"
 }
 
 function Get-ScriptEmbarque {

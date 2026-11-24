@@ -311,7 +311,10 @@ try {
     $tokM = $null ; $errM = $null
     [void][System.Management.Automation.Language.Parser]::ParseInput($moteur, [ref]$tokM, [ref]$errM)
     Check "moteur : analyse syntaxique" ((-not $errM) -or ($errM.Count -eq 0)) (($errM | ForEach-Object { "L" + $_.Extent.StartLineNumber + ": " + $_.Message }) -join " ; ")
-    $obsoletes = @('bgWorker', 'RunWorkerAsync', 'DEFAULT_XML_PATH', 'proxyUserBox', 'proxyPassBox', 'ProxyPassword')
+    # 'ProxyPassword' n'est plus un motif obsolete : c'est desormais une cle du fichier
+    # de configuration du mode silencieux, lue et jamais ecrite. Ce qui reste interdit
+    # est une affectation dans Save-ConfigPoste, verifiee juste apres sur son seul bloc.
+    $obsoletes = @('bgWorker', 'RunWorkerAsync', 'DEFAULT_XML_PATH', 'proxyUserBox', 'proxyPassBox')
     $trouves = @($obsoletes | Where-Object { ([regex]::Matches($src, $_)).Count -gt 0 })
     Check "aucun motif obsolete" ($trouves.Count -eq 0) ($trouves -join ", ")
     # Les champs vivent dans le XAML de la fenetre principale, le script les remplit :
@@ -323,7 +326,11 @@ try {
     # La config enregistree porte l'utilisateur, jamais le mot de passe : le relais
     # le garde en memoire, il doit etre ressaisi a chaque lancement.
     $enregistreUser = ($src -match 'ProxyUser\s*=\s*\$Fenetre\.FindName\("ChampProxyUser"\)')
-    $enregistrePass = [regex]::Matches($src, 'ProxyPass\w*\s*=').Count
+    # Le mot de passe peut apparaitre ailleurs (cle lue dans le fichier du mode
+    # silencieux) : ce qui est interdit est de l'ecrire dans la configuration du poste.
+    $blocConfigPoste = ""
+    if ($src -match '(?s)function Save-ConfigPoste \{.*?\r?\n\}') { $blocConfigPoste = $matches[0] }
+    $enregistrePass = [regex]::Matches($blocConfigPoste, 'ProxyPass\w*\s*=').Count
     Check "proxy authentifie : mot de passe jamais enregistre" ($enregistreUser -and ($enregistrePass -eq 0)) ("ProxyUser enregistre=" + $enregistreUser + " affectations de mot de passe=" + $enregistrePass)
 
     # Contrat des noms : tout nom que le script demande a la fenetre (FindName) doit exister
@@ -417,19 +424,117 @@ try {
         # Autres proprietes du binaire livre : meme commande de compilation que le README.
         $vi = (Get-Item -LiteralPath $exePath).VersionInfo
         $cons = " - RECOMPILER avec Invoke-PS2EXE (README, section Compilation de l EXE)"
-        Check "EXE : version 8.4.1.0" (($vi.FileVersion -eq "8.4.1.0") -and ($vi.ProductVersion -eq "8.4.1.0")) ("FileVersion=" + $vi.FileVersion + " ProductVersion=" + $vi.ProductVersion + " (attendu 8.4.1.0 / -Version)" + $cons)
+        # version.txt est la source unique : tout le reste s'y compare, EXE compris.
+        $vSource = ""
+        $cheminVersion = Join-Path $PSScriptRoot "version.txt"
+        if (Test-Path -LiteralPath $cheminVersion) { $vSource = ([string](Get-Content -LiteralPath $cheminVersion -Raw)).Trim() }
+        Check ("EXE : version " + $vSource) (($vSource -ne "") -and ($vi.FileVersion -eq $vSource) -and ($vi.ProductVersion -eq $vSource)) ("FileVersion=" + $vi.FileVersion + " ProductVersion=" + $vi.ProductVersion + " (version.txt=" + $vSource + " / -Version)" + $cons)
+
+        # Une seule version : le script la porte pour le rapport du mode silencieux, le
+        # badge l'affiche, le README et Compare-ExeRecompilation la repetent. Elles
+        # doivent etre egales, sinon un bump oublie quelque part part en livraison.
+        $vScript = ""
+        if ($src -match '(?m)^\$script:versionOutil\s*=\s*"([0-9.]+)"') { $vScript = $matches[1] }
+        $vBadge = ""
+        $texteXaml = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "Maquette\Principal.xaml"))
+        if ($texteXaml -match 'Text="([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)"') { $vBadge = $matches[1] }
+        $vCompare = ""
+        $texteCompare = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "Compare-ExeRecompilation.ps1"))
+        if ($texteCompare -match 'Version\s*=\s*"([0-9.]+)"') { $vCompare = $matches[1] }
+        $vReadme = ""
+        $texteReadmeV = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "README.md"))
+        if ($texteReadmeV -match '-Version\s+"([0-9.]+)"') { $vReadme = $matches[1] }
+        $versionsV = @($vScript, $vBadge, $vCompare, $vReadme)
+        $ecartsV = @($versionsV | Where-Object { $_ -ne $vSource })
+        Check "version : script, badge, README et recompilation annoncent celle de version.txt" (($ecartsV.Count -eq 0) -and ($versionsV -notcontains "") -and ($vSource -ne "")) ("script=" + $vScript + " badge=" + $vBadge + " README=" + $vReadme + " compare=" + $vCompare + " version.txt=" + $vSource)
         # Le badge de la fenetre annonce la version du binaire : deux sources, donc un
         # controle. Le badge est lu dans le XAML livre, pas dans une constante du test.
         $badge = if ($xaml -match '<TextBlock Text="([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)"\s+FontSize="11"') { $matches[1] } else { "(absent)" }
-        Check "XAML : badge de version = version de l'EXE" ($badge -eq $vi.FileVersion) ("badge=" + $badge + " EXE=" + $vi.FileVersion + " - aligner le badge de Maquette\Principal.xaml sur -Version")
+        Check "XAML : badge de version = version de version.txt" ($badge -eq $vSource) ("badge=" + $badge + " version.txt=" + $vSource + " - aligner le badge de Maquette\Principal.xaml sur -Version")
         # Le README annonce la version du programme a deux endroits : la commande de
         # compilation (-Version "...") et la prose ("version `...`, titre"). Toutes doivent
         # valoir celle du binaire livre. Les autres nombres a quatre parties du README ne
         # sont pas des versions du programme : l'ODT (16.0.x) et l'adresse du relais.
         $readmeCompil = if (Test-Path -LiteralPath (Join-Path $PSScriptRoot "README.md")) { [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "README.md")) } else { "" }
         $versionsReadme = @([regex]::Matches($readmeCompil, '(?i)version\s*["`]?([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
-        $ecartsVersion = @($versionsReadme | Where-Object { $_ -ne $vi.FileVersion })
-        Check "README : versions annoncees = version de l'EXE" (($versionsReadme.Count -gt 0) -and ($ecartsVersion.Count -eq 0)) ("README annonce=" + ($versionsReadme -join ", ") + " EXE=" + $vi.FileVersion + " - aligner le README (commande Invoke-PS2EXE et prose)")
+        $ecartsVersion = @($versionsReadme | Where-Object { $_ -ne $vSource })
+        Check "README : versions annoncees = version de version.txt" (($versionsReadme.Count -gt 0) -and ($ecartsVersion.Count -eq 0)) ("README annonce=" + ($versionsReadme -join ", ") + " version.txt=" + $vSource + " - aligner le README (commande Invoke-PS2EXE et prose)")
+
+        # --- Une seule source : version.txt, tenue par Set-Version.ps1 --------------
+        # Le script verifie l'alignement (code 0) et refuse d'ecrire des qu'un emplacement
+        # diverge (code 1). Les deux sont eprouves sur une copie, jamais sur le depot.
+        $bump = Join-Path $PSScriptRoot "Set-Version.ps1"
+        $codeVerif = -1
+        if (Test-Path -LiteralPath $bump) {
+            $null = & $psHost -NoProfile -ExecutionPolicy Bypass -File $bump -Racine $PSScriptRoot 2>&1
+            $codeVerif = $LASTEXITCODE
+        }
+        Check "version.txt : source unique, Set-Version confirme l'alignement" (($codeVerif -eq 0) -and ($vSource -ne "")) ("code=" + $codeVerif + " version.txt=" + $vSource)
+
+        if (-not $Fast) {
+            # La cible du bump est calculee : une version en dur ici ferait de ce test
+            # une seconde source, et Set-Version la refuserait.
+            $morceaux = $vSource.Split('.')
+            $morceaux[3] = [string]([int]$morceaux[3] + 1)
+            $vCible = $morceaux -join '.'
+
+            $copieBump = Join-Path $Work "bump"
+            if (Test-Path -LiteralPath $copieBump) { Remove-Item -LiteralPath $copieBump -Recurse -Force }
+            New-Item -ItemType Directory -Path (Join-Path $copieBump "Maquette") -Force | Out-Null
+            foreach ($f in @("version.txt", "Apercu-Maquette.ps1", "README.md", "Compare-ExeRecompilation.ps1", "Test-InstallOffice.ps1")) {
+                Copy-Item -LiteralPath (Join-Path $PSScriptRoot $f) -Destination $copieBump
+            }
+            Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Maquette\Principal.xaml") -Destination (Join-Path $copieBump "Maquette")
+
+            # 1) Un emplacement divergent : refus, et le message nomme fichier, ligne, valeur.
+            $xamlCopie = Join-Path $copieBump "Maquette\Principal.xaml"
+            $texteX = [System.IO.File]::ReadAllText($xamlCopie)
+            [System.IO.File]::WriteAllText($xamlCopie, ($texteX -replace 'Text="[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+"', 'Text="9.9.9.9"'))
+            $sortieRefus = (& $psHost -NoProfile -ExecutionPolicy Bypass -File $bump -Racine $copieBump 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+            $codeRefus = $LASTEXITCODE
+            Check "version : un emplacement divergent fait refuser le bump" (($codeRefus -eq 1) -and ($sortieRefus -match 'Principal\.xaml') -and ($sortieRefus -match '9\.9\.9\.9') -and ($sortieRefus -match 'ligne \d+')) ((('code=' + $codeRefus + " | " + $sortieRefus) -replace "\s+", " ").Trim())
+
+            # 2) Aligne a nouveau, un bump ecrit partout.
+            Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Maquette\Principal.xaml") -Destination (Join-Path $copieBump "Maquette") -Force
+            $null = & $psHost -NoProfile -ExecutionPolicy Bypass -File $bump -Racine $copieBump -Version $vCible 2>&1
+            $codeBump = $LASTEXITCODE
+            $vues = @(
+                [regex]::Match([System.IO.File]::ReadAllText((Join-Path $copieBump "version.txt")), '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+').Value
+                [regex]::Match([System.IO.File]::ReadAllText((Join-Path $copieBump "Apercu-Maquette.ps1")), 'versionOutil\s*=\s*"([0-9.]+)"').Groups[1].Value
+                [regex]::Match([System.IO.File]::ReadAllText((Join-Path $copieBump "Maquette\Principal.xaml")), 'Text="([0-9.]+)"').Groups[1].Value
+                [regex]::Match([System.IO.File]::ReadAllText((Join-Path $copieBump "Compare-ExeRecompilation.ps1")), 'Version\s*=\s*"([0-9.]+)"').Groups[1].Value
+                [regex]::Match([System.IO.File]::ReadAllText((Join-Path $copieBump "README.md")), '-Version\s+"([0-9.]+)"').Groups[1].Value
+            )
+            Check "version : le bump ecrit version.txt et les quatre copies" (($codeBump -eq 0) -and (@($vues | Where-Object { $_ -ne $vCible }).Count -eq 0)) ("code=" + $codeBump + " cible=" + $vCible + " vues=" + ($vues -join ", "))
+        }
+        # --- Demarrage de l'EXE : chemin du script nul ---------------------------
+        # PS2EXE ne renseigne pas $MyInvocation.MyCommand.Path. Split-Path -Parent $null
+        # levait "Impossible de lier l'argument au parametre Path" au demarrage : la
+        # resolution est isolee dans Get-DossierScript, qui ne jette plus.
+        $apercuTexte = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "Apercu-Maquette.ps1"))
+        $lignesApercu = @($apercuTexte -split "`r?`n")
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Get-DossierScript")
+        $dNul = Get-DossierScript -Chemin ""
+        $dVide = Get-DossierScript -Chemin $null
+        $dReel = Get-DossierScript -Chemin (Join-Path $PSScriptRoot "Apercu-Maquette.ps1")
+        Check "demarrage : un chemin de script nul ne leve plus, le dossier du binaire prend le relais" (($dNul -ne "") -and ($dNul -eq $dVide) -and ($dReel -eq $PSScriptRoot)) ("nul=" + $dNul + " vide=" + $dVide + " reel=" + $dReel)
+        Check "demarrage : Split-Path ne recoit plus le chemin brut de MyInvocation" (-not ($apercuTexte -match 'Split-Path\s+-Parent\s+\$MyInvocation')) "le garde doit preceder l'appel, pas le suivre"
+
+        # --- Cle produit : l'exemple du champ n'est pas une cle -----------------
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Get-CleSaisie")
+        $exempleCle = "XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"
+        Check "cle produit : l'exemple n'est jamais transmis, meme sans placeholder releve" (((Get-CleSaisie -Texte $exempleCle -Placeholder $exempleCle) -eq "") -and ((Get-CleSaisie -Texte $exempleCle -Placeholder "") -eq "")) ("avec=" + (Get-CleSaisie -Texte $exempleCle -Placeholder $exempleCle) + " sans=" + (Get-CleSaisie -Texte $exempleCle -Placeholder ""))
+        Check "cle produit : une vraie cle reste intacte, espaces retires" ((Get-CleSaisie -Texte " abcde-12345-fghij-67890-klmno " -Placeholder $exempleCle) -eq "abcde-12345-fghij-67890-klmno") ("rendu=" + (Get-CleSaisie -Texte " abcde-12345-fghij-67890-klmno " -Placeholder $exempleCle))
+        # La vraie fenetre, hors ecran : focus sur le champ, collage, relecture. Le texte du
+        # constat est ecrit par le script lui-meme, pas par le harnais.
+        $preuveCle = Join-Path $Work "preuve_champ_cle.txt"
+        $eapCle = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try { & $psHost -NoProfile -STA -ExecutionPolicy Bypass -File $MainScript -VerifierCle $preuveCle | Out-Null ; $codePreuveCle = $LASTEXITCODE }
+        finally { $ErrorActionPreference = $eapCle }
+        $textePreuveCle = if (Test-Path -LiteralPath $preuveCle) { [System.IO.File]::ReadAllText($preuveCle) } else { "" }
+        Check "cle produit : la vraie fenetre efface l'exemple au focus et prend le collage" (($codePreuveCle -eq 0) -and ($textePreuveCle -match "texte apres focus=\[\]") -and ($textePreuveCle -match "texte apres collage=\[abcde-12345-fghij-67890-klmno\]")) ("code=" + $codePreuveCle + " ; " + ($textePreuveCle -replace "\s+", " "))
+
         # L'Office Deployment Tool a sa propre version, annoncee dans le README juste apres
         # son nom : elle doit valoir celle du setup.exe livre, sans quoi la prose decrit un
         # autre outil que le binaire joint au depot. La lecture suit le nom, pas la ligne
@@ -982,6 +1087,10 @@ public class FakeAuthProxy
         _attendu = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(user + ":" + password));
     }
 
+    // Arme, ce faux proxy ne propose que NTLM : le cas a nommer, pas a confondre
+    // avec un mot de passe faux.
+    public bool NegocieSeul;
+
     public int Port { get { return _port; } }
     public int Refus { get { return _refus; } }
     public int Tunnels { get { return _tunnels; } }
@@ -1035,7 +1144,8 @@ public class FakeAuthProxy
             if (!ok)
             {
                 Interlocked.Increment(ref _refus);
-                byte[] ko = Encoding.ASCII.GetBytes("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\nContent-Length: 0\r\n\r\n");
+                string defi = NegocieSeul ? "NTLM" : "Basic realm=\"proxy\"";
+                byte[] ko = Encoding.ASCII.GetBytes("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: " + defi + "\r\nContent-Length: 0\r\n\r\n");
                 s.Write(ko, 0, ko.Length);
                 s.Flush();
                 return;
@@ -1058,6 +1168,9 @@ public class FakeAuthProxy
 }
 '@
     Invoke-Expression (Get-FunctionText -Lines $lines -Name "Start-ProxyRelay")
+    # Le mode silencieux passe par cette couche : sans elle, le refus viendrait d'une
+    # fonction absente du harnais, pas du relais lui-meme.
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "Start-AuthenticatedProxy")
     Invoke-Expression (Get-FunctionText -Lines $lines -Name "Stop-ProxyRelay")
     $script:ProxyRelay = $null
     if (-not ("FakeAuthProxy" -as [type])) { Add-Type -TypeDefinition $fakeProxyCs -Language CSharp }
@@ -1187,6 +1300,26 @@ public class FakeAuthProxy
     $t2 = @($r2.Logs) -join " "
     Check "relais deploye : sans ProxyRelay, message historique (LocalSystem)" (($r2.Sync.StepState[2] -eq "error") -and ($t2 -match 'exige une authentification \(407\)') -and ($t2 -match 'LocalSystem') -and ($t2 -notmatch 'refuse les identifiants fournis')) (Solution $r2)
     $faux407.Stop()
+
+    # Un proxy qui n'offre que NTLM doit etre nomme : sinon l'administrateur cherche un
+    # mot de passe faux alors que le relais ne peut pas negocier.
+    # La copie d'interface est extraite comme Stop-ProxyRelay : le harnais ne charge
+    # pas tout le moteur dans sa portee.
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "Test-ProxyConnect")
+    $fauxNtlm = New-Object FakeAuthProxy -ArgumentList @("eleve", "secret")
+    $fauxNtlm.NegocieSeul = $true
+    $fauxNtlm.Start()
+    $sonde = Test-ProxyConnect -ProxyHost "127.0.0.1" -ProxyPort $fauxNtlm.Port -TargetHost "officecdn.microsoft.com" -TargetPort 443
+    Check "proxy 407 NTLM : les schemas annonces sont lus" (($sonde.Code -eq 407) -and ($sonde.Schemes -match 'NTLM') -and ($sonde.Schemes -notmatch 'Basic')) ("code=" + $sonde.Code + " schemas=" + $sonde.Schemes)
+
+    $cfgNtlm = New-Cfg (New-SyncHash) $fakeExe (Join-Path $Work "relais_ntlm") -Proxy $true
+    $cfgNtlm.ProxyPort = [string]$fauxNtlm.Port
+    $cfgNtlm.ProxyRelay = $true
+    $cfgNtlm.ProxyRelayTarget = "10.0.0.1:3128"
+    $r3 = Invoke-Deploy $Worker $cfgNtlm $argsFile
+    $t3 = @($r3.Logs) -join " "
+    Check "proxy 407 NTLM : le message nomme le schema et les issues" (($r3.Sync.StepState[2] -eq "error") -and ($t3 -match 'NTLM') -and ($t3 -match 'Depot de sources') -and ($t3 -notmatch 'refuse les identifiants fournis')) (Solution $r3)
+    $fauxNtlm.Stop()
 
     Section "8 ter. Reliquat de relais au demarrage"
     # Un arret brutal laisse le relais loopback dans WinHTTP (machine) et/ou dans le
@@ -1628,7 +1761,7 @@ public class FakeAuthProxy
     $racinePartante = $null
     if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot ".git"))) {
         # Copie extraite d'un ZIP (Code -> Download ZIP) : il n'y a pas de depot a exporter,
-        # donc rien a recouper ici — la section 1 bis vient de verifier l'empreinte des
+        # donc rien a recouper ici - la section 1 bis vient de verifier l'empreinte des
         # captures sur cette meme copie, la rejouer n'apprendrait rien. Reste la completude
         # du dossier, que seule cette section regarde. Un clone et la CI, eux, exportent et
         # verifient l'archive.
@@ -1814,6 +1947,237 @@ public class FakeAuthProxy
     $detailVerif = "code=" + $codeVerif + " ; " + $ligneVerif
     if ($echecsVerif.Count -gt 0) { $detailVerif += " ; " + (($echecsVerif | ForEach-Object { $_.Trim() }) -join " ; ") }
     Check "Livraison.zip : le verificateur du poste (sans git) passe sur l'archive extraite" (($codeVerif -eq 0) -and ($ligneVerif -match 'RESULTAT : livraison conforme')) $detailVerif
+
+
+    Section "13. Mode silencieux : configuration, rapport, codes de sortie"
+    # Le mode silencieux est lance comme le ferait une GPO : processus separe, code de
+    # sortie du processus, rapport relu sur disque. Les refus constates sont ceux du
+    # script lui-meme, pas une simulation du harnais.
+    function Invoke-Silencieux {
+        param([string]$FichierConfig, [string]$FichierRapport)
+        $eap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $sortie = (& $psHost -NoProfile -STA -ExecutionPolicy Bypass -File $MainScript -Silent -Config $FichierConfig -Rapport $FichierRapport 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+            $code = $LASTEXITCODE
+        } finally { $ErrorActionPreference = $eap }
+        return @{ Code = $code ; Sortie = $sortie }
+    }
+
+    function New-ConfigSilencieuse {
+        param([string]$Chemin, $Champs)
+        $obj = [ordered]@{}
+        foreach ($k in $Champs.Keys) { $obj[$k] = $Champs[$k] }
+        [System.IO.File]::WriteAllText($Chemin, ($obj | ConvertTo-Json -Depth 4), (New-Object System.Text.UTF8Encoding($false)))
+        return $Chemin
+    }
+
+    function Read-Rapport {
+        param([string]$Chemin)
+        if (-not (Test-Path -LiteralPath $Chemin)) { return $null }
+        try { return (Get-Content -LiteralPath $Chemin -Raw | ConvertFrom-Json) } catch { return $null }
+    }
+
+    $jetonsSil = $null ; $errSil = $null
+    $astSil = [System.Management.Automation.Language.Parser]::ParseFile($MainScript, [ref]$jetonsSil, [ref]$errSil)
+    $paramsSil = @()
+    if ($null -ne $astSil.ParamBlock) { $paramsSil = @($astSil.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath }) }
+    $manquantsParams = @(@("Silent", "Config", "Rapport") | Where-Object { $paramsSil -notcontains $_ })
+    Check "silencieux : -Silent, -Config et -Rapport declares" ($manquantsParams.Count -eq 0) ("parametres = " + ($paramsSil -join ", "))
+
+    $defsSil = @{}
+    foreach ($d in $astSil.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+        if (-not $defsSil.ContainsKey($d.Name)) { $defsSil[$d.Name] = $d.Extent.Text }
+    }
+    # Les fonctions de lancement sont partagees avec l'ecran : le mode sans fenetre les
+    # extrait comme le reste, sinon il tourne avec un lancement a lui.
+    $requisesSil = @("Get-CodeSortie", "New-EtapesRapport", "New-RapportPoste", "Write-RapportPoste",
+                     "New-SyncDeploiement", "Start-RelaisDeploiement", "Start-RelaisSilencieux",
+                     "Start-WorkerRunspace",
+                     "Invoke-DeploiementSilencieux")
+    $absentesSil = @($requisesSil | Where-Object { -not $defsSil.ContainsKey($_) })
+    Check "silencieux : les fonctions du mode sans fenetre existent" ($absentesSil.Count -eq 0) ("absentes : " + ($absentesSil -join ", "))
+    . ([scriptblock]::Create((@($requisesSil | ForEach-Object { $defsSil[$_] }) -join "`r`n`r`n")))
+
+    # 1. Fichier absent : refus avant tout depart, rapport ecrit quand meme.
+    $rapAbsent = Join-Path $Work "silencieux_absent.json"
+    $r1 = Invoke-Silencieux (Join-Path $Work "config_inexistant.json") $rapAbsent
+    $rap1 = Read-Rapport $rapAbsent
+    $codeRap1 = "(aucun)"
+    if ($null -ne $rap1) { $codeRap1 = [string]$rap1.Code }
+    Check "silencieux : config absente -> code 10 et rapport ecrit" (($r1.Code -eq 10) -and ($null -ne $rap1) -and ($rap1.Code -eq 10) -and ($rap1.Resultat -eq "Echec")) ("code=" + $r1.Code + " rapport=" + $codeRap1 + " ; " + ($r1.Sortie -replace "\s+", " "))
+
+    # 2. JSON illisible : refuse en nommant le fichier, pas une exception brute.
+    $cfgCassee = Join-Path $Work "config_cassee.json"
+    Set-Content -LiteralPath $cfgCassee -Value "{ ceci n'est pas du JSON" -Encoding ASCII
+    $r2 = Invoke-Silencieux $cfgCassee (Join-Path $Work "silencieux_cassee.json")
+    Check "silencieux : JSON illisible -> code 10" (($r2.Code -eq 10) -and ($r2.Sortie -match "JSON illisible")) ("code=" + $r2.Code + " ; " + ($r2.Sortie -replace "\s+", " "))
+
+    # 3. Un secret en clair dans un fichier qui part sur un partage serait lu par tous.
+    $cfgClair = New-ConfigSilencieuse (Join-Path $Work "config_clair.json") ([ordered]@{
+        SetupExePath = (Join-Path $Work "absent_setup.exe")
+        KmsServer = "127.0.0.1:1688"
+        AutoInstall = $true
+        ProductKey = "XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"
+    })
+    $r3 = Invoke-Silencieux $cfgClair (Join-Path $Work "silencieux_clair.json")
+    Check "silencieux : secret en clair refuse en le nommant" (($r3.Code -eq 10) -and ($r3.Sortie -match "secret en clair refuse : ProductKey")) ("code=" + $r3.Code + " ; " + ($r3.Sortie -replace "\s+", " "))
+
+    # 4. Pre-vol non conforme : refus 10, et le rapport dit que rien n'a tourne.
+    $cfgRefus = New-ConfigSilencieuse (Join-Path $Work "config_refus.json") ([ordered]@{
+        SetupExePath = (Join-Path $Work "absent_setup.exe")
+        KmsServer = ""
+        AutoInstall = $true
+        AutoActivate = $true
+    })
+    $rapRefus = Join-Path $Work "silencieux_refus.json"
+    $r4 = Invoke-Silencieux $cfgRefus $rapRefus
+    $rap4 = Read-Rapport $rapRefus
+    $etapesAttente = -1
+    if ($null -ne $rap4) { $etapesAttente = @($rap4.Etapes | Where-Object { $_.Etat -eq "waiting" }).Count }
+    Check "silencieux : pre-vol non conforme -> code 10, cinq etapes en attente" (($r4.Code -eq 10) -and ($null -ne $rap4) -and ($etapesAttente -eq 5) -and ($rap4.Message -match "activation KMS demandee sans adresse")) ("code=" + $r4.Code + " etapes en attente=" + $etapesAttente + " ; " + ($r4.Sortie -replace "\s+", " "))
+
+    # 4b. Relais impossible : le code 50 est exerce, pas seulement annonce. Un port
+    #     amont invalide fait echouer Start-AuthenticatedProxy, comme un relais qui ne
+    #     peut pas demarrer ; le contexte ne doit annoncer aucun proxy.
+    $cfgRelais = New-Cfg (New-SyncHash) $fakeExe (Join-Path $Work "sil_relais") -Proxy $true
+    $cfgRelais.ProxyPort = "0"
+    $ctxRelais = @{ Proxy = "" }
+    $relais50 = Start-RelaisSilencieux -Cfg $cfgRelais -Valeurs @{ ProxyUser = "eleve" ; ProxyPassword = "secret" } -Contexte $ctxRelais
+    # Le motif doit venir du relais : "Port proxy invalide" est leve par
+    # Start-AuthenticatedProxy, pas par une fonction absente du harnais.
+    Check "silencieux : relais proxy impossible -> code 50" (($relais50.Code -eq 50) -and ($relais50.Motif -match "relais proxy impossible : Port proxy invalide") -and ($ctxRelais.Proxy -eq "")) ("code=" + $relais50.Code + " motif=" + $relais50.Motif)
+
+    # 4c. Configuration partielle : les cles absentes prennent leur defaut, et le refus
+    #     nomme ce qui manque au lieu de lever sur une cle absente.
+    $cfgPartiel = New-ConfigSilencieuse (Join-Path $Work "config_partiel.json") ([ordered]@{
+        AutoInstall  = $true
+        SetupExePath = (Join-Path $Work "absent_partiel.exe")
+    })
+    $rapPartiel = Join-Path $Work "silencieux_partiel.json"
+    $r4c = Invoke-Silencieux $cfgPartiel $rapPartiel
+    $rap4c = Read-Rapport $rapPartiel
+    Check "silencieux : config partielle -> defauts et refus nomme" (($r4c.Code -eq 10) -and ($r4c.Sortie -match "setup.exe absent") -and ($null -ne $rap4c) -and ($rap4c.Code -eq 10)) ("code=" + $r4c.Code + " ; " + ($r4c.Sortie -replace "\s+", " "))
+
+    # 4d. Chemin de rapport invalide : le processus rend son code, dit que le rapport
+    #     manque, et n'echoue pas sur une exception apres coup.
+    $blocage = Join-Path $Work "blocage_rapport.txt"
+    Set-Content -LiteralPath $blocage -Value "x"
+    $r4d = Invoke-Silencieux $cfgPartiel (Join-Path $blocage "rapport.json")
+    Check "silencieux : chemin de rapport invalide -> code rendu et erreur dite" (($r4d.Code -eq 10) -and ($r4d.Sortie -match "rapport non ecrit")) ("code=" + $r4d.Code + " ; " + ($r4d.Sortie -replace "\s+", " "))
+
+    # 5. Codes de sortie : chaque etape en echec a le sien, et la desinstallation
+    #    compte comme une installation (30).
+    $codesEtape = @{}
+    foreach ($cas in @(@(0, 30), @(2, 20), @(3, 30), @(4, 40))) {
+        $syncCas = @{ StepState = [string[]]@("waiting", "waiting", "waiting", "waiting", "waiting") ; HasError = $false }
+        $syncCas.StepState[$cas[0]] = "error"
+        $codesEtape[$cas[0]] = Get-CodeSortie $syncCas
+    }
+    Check "silencieux : chaque etape en echec donne son code (20/30/40)" (($codesEtape[0] -eq 30) -and ($codesEtape[2] -eq 20) -and ($codesEtape[3] -eq 30) -and ($codesEtape[4] -eq 40)) ("desinstallation=" + $codesEtape[0] + " sources=" + $codesEtape[2] + " installation=" + $codesEtape[3] + " activation=" + $codesEtape[4])
+
+    # 6. Un worker qui se declare en echec sans etape en erreur reste un echec (60).
+    #    Le succes 0 et l'echec "sans conclure" sont exerces en vrai plus bas : ici,
+    #    seule la correspondance propre a HasError est verifiee.
+    $syncHors = @{ StepState = [string[]]@("done", "done", "done", "done", "skipped") ; HasError = $true }
+    $cHors = Get-CodeSortie $syncHors
+    Check "silencieux : echec declare hors etapes -> code 60" ($cHors -eq 60) ("hors etapes=" + $cHors)
+
+    # 7. Le rapport : forme unique, relue en JSON, etapes comprises.
+    $rapForme = Join-Path $Work "rapport_forme.json"
+    $ctxForme = @{ Version = "9.9.9.9" ; Mode = "Deploiement" ; Debut = (Get-Date).AddSeconds(-12) ; Kms = "kms.exemple:1688" ; Proxy = "" }
+    $syncForme = @{ StepState = [string[]]@("done", "done", "done", "error", "skipped") ; HasError = $true }
+    $rapportForme = New-RapportPoste $ctxForme 30 "echec simule" (New-EtapesRapport $syncForme) ($rapForme -replace "\.json$", ".log")
+    Write-RapportPoste $rapForme $rapportForme
+    $relu = Read-Rapport $rapForme
+    $champsOk = ($null -ne $relu) -and ($relu.Outil -eq "InstallOffice") -and ($relu.Version -eq "9.9.9.9") -and
+                ($relu.Poste -eq $env:COMPUTERNAME) -and ($relu.Code -eq 30) -and ($relu.Resultat -eq "Echec") -and
+                (@($relu.Etapes).Count -eq 5) -and ($relu.Etapes[3].Etat -eq "error") -and ($relu.DureeSecondes -ge 10)
+    Check "silencieux : rapport complet et relu (version, poste, code, etapes)" $champsOk ("champs=" + $(if ($null -ne $relu) { "code=" + $relu.Code + " etapes=" + @($relu.Etapes).Count + " duree=" + $relu.DureeSecondes } else { "(rapport illisible)" }))
+
+    # 8. Le worker du moteur, lance sans fenetre, rend le code de son resultat. Le
+    # depot est cree ici : la section 10 reutilise le nom $depot pour son depot git,
+    # et un depot sans 'Office\Data' ferait echouer l'etape des sources.
+    $depotSil = Join-Path $Work "depot_silencieux"
+    New-Item -ItemType Directory -Path (Join-Path $depotSil "Office\Data") -Force | Out-Null
+    Set-Content -Path (Join-Path $depotSil "Office\Data\v64.cab") -Value "x" -NoNewline
+    $env:FAKE_ODT_CODE = "0"
+    $rapOk = Join-Path $Work "silencieux_ok.json"
+    $ctxSil = @{ Version = "9.9.9.9" ; Mode = "Deploiement" ; Debut = (Get-Date) ; Kms = "" ; Proxy = "" }
+    $codeOk = Invoke-DeploiementSilencieux -Cfg (New-Cfg (New-SyncHash) $fakeExe (Join-Path $Work "sil_ok") -Depot $depotSil -Install $true) `
+                -Texte $Worker -CheminRapport $rapOk -CheminJournal ($rapOk -replace "\.json$", ".log") -Contexte $ctxSil -DelaiMs 50 -SansConsole
+    $rapOkLu = Read-Rapport $rapOk
+    $etapesDone = -1
+    if ($null -ne $rapOkLu) { $etapesDone = @($rapOkLu.Etapes | Where-Object { $_.Etat -eq "done" }).Count }
+    Check "silencieux : worker rejoue sans fenetre -> code 0 et rapport" (($codeOk -eq 0) -and ($null -ne $rapOkLu) -and ($rapOkLu.Code -eq 0) -and ($etapesDone -ge 3)) ("code=" + $codeOk + " etapes faites=" + $etapesDone)
+
+    # 9. Echec ODT : le code dit la phase, pas seulement "echec".
+    $env:FAKE_ODT_CODE = "30066"
+    $codeOdt = Invoke-DeploiementSilencieux -Cfg (New-Cfg (New-SyncHash) $fakeExe (Join-Path $Work "sil_odt") -Depot $depotSil -Install $true) `
+                -Texte $Worker -CheminRapport (Join-Path $Work "silencieux_odt.json") -CheminJournal (Join-Path $Work "silencieux_odt.log") -Contexte $ctxSil -DelaiMs 50 -SansConsole
+    Check "silencieux : echec ODT -> code 30 (installation)" ($codeOdt -eq 30) ("code=" + $codeOdt + " (attendu 30)")
+
+    # 9b. Worker qui rend la main sans conclure : 60, et le rapport dit pourquoi.
+    $rapNu = Join-Path $Work "silencieux_nu.json"
+    $codeNu = Invoke-DeploiementSilencieux -Cfg (New-Cfg (New-SyncHash) $fakeExe (Join-Path $Work "sil_nu")) `
+                -Texte "return" -CheminRapport $rapNu -CheminJournal ($rapNu -replace "\.json$", ".log") -Contexte $ctxSil -DelaiMs 20 -SansConsole
+    $rapNuLu = Read-Rapport $rapNu
+    Check "silencieux : worker muet -> code 60 et rapport qui le dit" (($codeNu -eq 60) -and ($null -ne $rapNuLu) -and ($rapNuLu.Code -eq 60) -and ($rapNuLu.Message -match "sans conclure")) ("code=" + $codeNu + " message=" + $(if ($null -ne $rapNuLu) { $rapNuLu.Message } else { "(aucun)" }))
+
+    # 10. Activation demandee sans adresse : code 40, sans toucher a ospp.vbs.
+    $env:FAKE_ODT_CODE = "0"
+    $cfgAct = New-Cfg (New-SyncHash) $fakeExe (Join-Path $Work "sil_act") -Depot $depotSil -Install $true -Activate $true
+    $cfgAct.KmsHost = ""
+    $cfgAct.ActivateOnly = $false
+    $codeAct = Invoke-DeploiementSilencieux -Cfg $cfgAct -Texte $Worker `
+                -CheminRapport (Join-Path $Work "silencieux_act.json") -CheminJournal (Join-Path $Work "silencieux_act.log") -Contexte $ctxSil -DelaiMs 50 -SansConsole
+    Check "silencieux : activation sans adresse -> code 40" ($codeAct -eq 40) ("code=" + $codeAct + " (attendu 40)")
+
+    # 11. Le journal accompagne le rapport : c'est ce qu'un enseignant envoie.
+    $journalOk = Join-Path $Work "silencieux_ok.log"
+    $lignesJournal = 0
+    if (Test-Path -LiteralPath $journalOk) { $lignesJournal = @(Get-Content -LiteralPath $journalOk).Count }
+    Check "silencieux : journal ecrit a cote du rapport" ($lignesJournal -gt 5) ("lignes=" + $lignesJournal + " dans " + $journalOk)
+
+    # 12. Ce que la documentation doit dire pour qu'un deploiement scripte soit possible.
+    $texteReadmeSil = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "README.md"))
+    $docsSil = ($texteReadmeSil -match '-Silent') -and ($texteReadmeSil -match '-Rapport') -and
+               ($texteReadmeSil -match 'ProxyPasswordEnv') -and ($texteReadmeSil -match 'Code de sortie')
+    Check "README : mode silencieux, secrets et codes de sortie documentes" $docsSil ("-Silent=" + ($texteReadmeSil -match '-Silent') + " ProxyPasswordEnv=" + ($texteReadmeSil -match 'ProxyPasswordEnv') + " codes=" + ($texteReadmeSil -match 'Code de sortie'))
+
+
+    Section "14. Banc de preuve du proxy authentifie (vrai proxy local)"
+    # Le banc monte un vrai proxy amont (Basic exige, 407, journal par requete), le
+    # relais de l'outil devant, et une cible locale. Il est lance comme le ferait un
+    # utilisateur : processus separe, rapport relu sur disque.
+    $bancScript = Join-Path $PSScriptRoot "Banc-ProxyAuthentifie.ps1"
+    $rapBanc = Join-Path $Work "banc.json"
+    $codeBanc = -1
+    $sortieBanc = ""
+    if (Test-Path -LiteralPath $bancScript) {
+        $eapBanc = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $sortieBanc = (& $psHost -NoProfile -STA -ExecutionPolicy Bypass -File $bancScript -SansConsole -Rapport $rapBanc 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+            $codeBanc = $LASTEXITCODE
+        } finally { $ErrorActionPreference = $eapBanc }
+    }
+    $banc = $null
+    if (Test-Path -LiteralPath $rapBanc) { try { $banc = Get-Content -LiteralPath $rapBanc -Raw | ConvertFrom-Json } catch { } }
+    $journalBanc = @()
+    $testsBanc = @()
+    if ($null -ne $banc) {
+        $journalBanc = @($banc.JournalProxy | ForEach-Object { [string]$_ })
+        $testsBanc = @($banc.Tests)
+    }
+    Check "banc proxy : six preuves hors ligne, code 0" (($codeBanc -eq 0) -and ($null -ne $banc) -and ($banc.Ok -eq $true) -and ($testsBanc.Count -eq 6)) ("code=" + $codeBanc + " tests=" + $testsBanc.Count + " ; " + ($sortieBanc -replace "\s+", " "))
+    Check "banc proxy : le proxy amont voit le Basic du relais sur le tunnel" (@($journalBanc | Where-Object { $_ -match 'CONNECT 127\.0\.0\.1:\d+ auth=oui user=' }).Count -ge 1) ($journalBanc -join " | ")
+    Check "banc proxy : requete HTTP en clair transmise avec le Basic (defaut corrige)" (@($journalBanc | Where-Object { $_ -match 'GET http://.* auth=oui user=' }).Count -ge 1) ($journalBanc -join " | ")
+    Check "banc proxy : connexion reutilisee - deux requetes authentifiees, aucune sans en-tete" ((@($journalBanc | Where-Object { $_ -match 'GET http://.* auth=oui user=' }).Count -ge 2) -and (@($journalBanc | Where-Object { $_ -match 'GET http://.* auth=non' }).Count -eq 0)) ($journalBanc -join " | ")
+    Check "banc proxy : mauvais mot de passe -> 407 journalise" ((@($journalBanc | Where-Object { $_ -match 'auth=non' }).Count -ge 1) -and (@($journalBanc | Where-Object { $_ -match '^[0-9:.]+ 407 ' }).Count -ge 1)) ($journalBanc -join " | ")
+    $jsonBanc = ""
+    if ($null -ne $banc) { $jsonBanc = ConvertTo-Json -InputObject $banc -Depth 6 }
+    Check "banc proxy : le mot de passe ne figure pas dans le rapport" (($jsonBanc -ne "") -and ($jsonBanc -notmatch [regex]::Escape("secret-banc"))) "le rapport ne doit porter que l'utilisateur"
 }
 catch {
     Write-Host ("ERREUR DU HARNAIS : " + $_.Exception.Message) -ForegroundColor Red
