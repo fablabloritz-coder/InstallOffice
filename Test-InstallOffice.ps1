@@ -2170,14 +2170,33 @@ public class FakeAuthProxy
         $journalBanc = @($banc.JournalProxy | ForEach-Object { [string]$_ })
         $testsBanc = @($banc.Tests)
     }
-    Check "banc proxy : six preuves hors ligne, code 0" (($codeBanc -eq 0) -and ($null -ne $banc) -and ($banc.Ok -eq $true) -and ($testsBanc.Count -eq 6)) ("code=" + $codeBanc + " tests=" + $testsBanc.Count + " ; " + ($sortieBanc -replace "\s+", " "))
+    Check "banc proxy : huit preuves hors ligne, code 0" (($codeBanc -eq 0) -and ($null -ne $banc) -and ($banc.Ok -eq $true) -and ($testsBanc.Count -eq 8)) ("code=" + $codeBanc + " tests=" + $testsBanc.Count + " ; " + ($sortieBanc -replace "\s+", " "))
     Check "banc proxy : le proxy amont voit le Basic du relais sur le tunnel" (@($journalBanc | Where-Object { $_ -match 'CONNECT 127\.0\.0\.1:\d+ auth=oui user=' }).Count -ge 1) ($journalBanc -join " | ")
     Check "banc proxy : requete HTTP en clair transmise avec le Basic (defaut corrige)" (@($journalBanc | Where-Object { $_ -match 'GET http://.* auth=oui user=' }).Count -ge 1) ($journalBanc -join " | ")
     Check "banc proxy : connexion reutilisee - deux requetes authentifiees, aucune sans en-tete" ((@($journalBanc | Where-Object { $_ -match 'GET http://.* auth=oui user=' }).Count -ge 2) -and (@($journalBanc | Where-Object { $_ -match 'GET http://.* auth=non' }).Count -eq 0)) ($journalBanc -join " | ")
     Check "banc proxy : mauvais mot de passe -> 407 journalise" ((@($journalBanc | Where-Object { $_ -match 'auth=non' }).Count -ge 1) -and (@($journalBanc | Where-Object { $_ -match '^[0-9:.]+ 407 ' }).Count -ge 1)) ($journalBanc -join " | ")
     $jsonBanc = ""
+    Check "banc proxy : le proxy Negocier a authentifie le compte Windows" (@($testsBanc | Where-Object { $_.Nom -match 'Negocier : le relais' -and $_.Ok -eq $true }).Count -eq 1) ("le banc doit prouver l'identite du compte, pas seulement un 200")
     if ($null -ne $banc) { $jsonBanc = ConvertTo-Json -InputObject $banc -Depth 6 }
     Check "banc proxy : le mot de passe ne figure pas dans le rapport" (($jsonBanc -ne "") -and ($jsonBanc -notmatch [regex]::Escape("secret-banc"))) "le rapport ne doit porter que l'utilisateur"
+
+    Section "15. Mode diagnostic (lecture seule)"
+    # Le moteur est lance comme un utilisateur le ferait, sans droits administrateur :
+    # le mode doit rendre ses six points et un verdict sans ouvrir de fenetre ni toucher
+    # au poste. On exige les intitules, pas les valeurs (proxy, DNS et KMS dependent du reseau).
+    $sortieDiag = ""
+    $codeDiag = -1
+    if (Test-Path -LiteralPath $EngineScript) {
+        $eapDiag = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $sortieDiag = (& $psHost -NoProfile -ExecutionPolicy Bypass -File $EngineScript -Diagnostic 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+            $codeDiag = $LASTEXITCODE
+        } finally { $ErrorActionPreference = $eapDiag }
+    }
+    $pointsDiag = @("Espace disque", "Office deja present", "Droits administrateur", "Proxy joignable", "DNS KMS", "Horloge", "Verdict")
+    $manquantsDiag = @($pointsDiag | Where-Object { $sortieDiag -notmatch [regex]::Escape($_) })
+    Check "diagnostic : six points verifies et verdict, sans installation" (($codeDiag -eq 0 -or $codeDiag -eq 1) -and ($manquantsDiag.Count -eq 0)) ("code=" + $codeDiag + " manquants=" + ($manquantsDiag -join ", ") + " ; " + ($sortieDiag -replace "\s+", " "))
 }
 catch {
     Write-Host ("ERREUR DU HARNAIS : " + $_.Exception.Message) -ForegroundColor Red

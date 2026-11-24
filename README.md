@@ -28,7 +28,7 @@ Le dossier extrait contient tout : le programme, ses fenêtres (`Maquette\`), le
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `Install-Office2024-KMS.ps1` | Moteur : déroulé de déploiement extrait par l'EXE ; son interface WinForms historique reste exécutable telle quelle |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (159 cas, `-Fast` pour la section 1 seule) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (161 cas, `-Fast` pour la section 1 seule) |
 | `version.txt` | Version de l'outil, source unique : le badge, le README, le script et `Compare-ExeRecompilation.ps1` s'y comparent |
 | `Set-Version.ps1` | Vérifie ou écrit cette version partout, et refuse si un emplacement diverge |
 | `New-Livraison.ps1` | Construit `Livraison.zip` en liste blanche, avec `SHA256SUMS` |
@@ -76,6 +76,28 @@ l'installation et l'activation KMS se font en une seule passe. Si le dépôt est
 UNC, les sources sont recopiées localement (`robocopy`), car le service Click-to-Run ne
 lit pas les partages sous le compte `LocalSystem`.
 
+## Diagnostic sans installation
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-Office2024-KMS.ps1 -Diagnostic
+```
+
+Lecture seule, sans élévation et sans fenêtre : six points sont mesurés, puis un verdict.
+
+| Point | Ce qui est mesuré |
+| --- | --- |
+| Espace disque | Go libres sur `C:`, comparés au minimum de 4 Go |
+| Office déjà présent | entrées d'installation Office dans le registre, dont Office LTSC 2024 |
+| Droits administrateur | session courante, élevée ou non |
+| Proxy joignable | proxy de la configuration : port, puis `CONNECT officecdn.microsoft.com:443` ; sans proxy, accès direct annoncé |
+| DNS KMS | résolution du serveur KMS configuré (port 1688) ; l'adresse d'exemple est signalée |
+| Horloge | date, fuseau, source de temps Windows et état du service `W32Time` |
+
+Chaque ligne porte `[OK]`, `[ATTENTION]` ou `[BLOQUANT]` ; le code de sortie vaut 1 s'il
+reste un point bloquant (espace disque insuffisant), 0 sinon. Rien n'est écrit : ni journal,
+ni `config.json`, ni réglage proxy. Lancé sans droits administrateur, il le dit au lieu de
+demander une élévation : c'est justement l'un des points mesurés.
+
 ## Pourquoi un réglage proxy dédié ?
 
 `setup.exe /download` ne lit **pas** `HTTP_PROXY`. Le téléchargement est effectué par le
@@ -95,9 +117,10 @@ programme démarre alors un **relais local** (sur `127.0.0.1`, port libre) qui a
 l'en-tête `Proxy-Authorization` vers le vrai proxy et laisse passer le tunnel ; Windows est
 pointé sur ce relais, qui n'est pour Office qu'un proxy ordinaire. Le relais ne vit que le
 temps du déploiement et le mot de passe n'est **jamais** écrit sur disque : il faut le
-ressaisir à chaque lancement. Seule l'authentification **Basic** est prise en charge ; un
-proxy qui n'accepte que NTLM ou Kerberos reste hors de portée, d'où le mode « Dépôt de
-sources » (voir *Proxy d'établissement : Basic oui, NTLM et Kerberos non*). Si le programme est tué pendant le téléchargement, avant la restauration, le poste
+ressaisir à chaque lancement. Deux modes : **Basic** quand un compte est saisi, et **Negotiate** (NTLM/Kerberos)
+quand les champs identifiants restent vides — le relais demande alors `Negotiate` et
+laisse Windows SSPI signer avec le compte de la session (voir *Proxy d'établissement :
+Basic, ou identifiants Windows*). Si le programme est tué pendant le téléchargement, avant la restauration, le poste
 garderait le relais loopback dans **deux** configurations : WinHTTP (machine, ce que lit
 Office) et le proxy de session (`HKCU\…\Internet Settings`, `ProxyEnable=1`, ce que lit
 le navigateur). Le port du relais est donc **enregistré au lancement**
@@ -120,7 +143,7 @@ le tunnel.
 powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Banc-ProxyAuthentifie.ps1
 ```
 
-Six preuves, hors ligne, en une seconde :
+Huit preuves, hors ligne, en une seconde :
 
 - le client parle au relais **sans identifiants**, et le proxy voit `auth=oui user=…` ;
 - un mauvais mot de passe remonte un **407** au client, pas un tunnel muet ;
@@ -128,6 +151,10 @@ Six preuves, hors ligne, en une seconde :
   CDN Office utilise pour les `.cab` du téléchargement ;
 - un proxy qui n'offre que **NTLM** laisse remonter son `407` et son `Proxy-Authenticate`,
   ce qui permet de nommer le schéma au lieu d'accuser le mot de passe ;
+- un proxy qui exige **Negotiate** authentifie le relais avec le **compte Windows** de la
+  session : le proxy journalise `AUTH DOMAINE\compte`, et le corps `BANC-OK` arrive ;
+- le même proxy, sans relais, refuse la requête (`407` + `Negotiate`) : l'authentification
+  est bien exigée, pas contournée ;
 - une connexion que le client voudrait **réutiliser** est fermée proprement
   (`Connection: close`) : la requête suivante repart sur une connexion neuve, authentifiée
   elle aussi, au lieu de partir sans en-tête et de prendre un 407 ;
@@ -175,37 +202,29 @@ connexion amont** et annonce `Connection: close` aux deux bouts : le client rouv
 connexion neuve est authentifiée. Un parseur HTTP pour réinjecter l'en-tête à chaque
 message aurait coûté bien plus cher, pour un trafic fait de `GET` de fichiers.
 
-## Proxy d'établissement : Basic oui, NTLM et Kerberos non
-
-Décision prise avant la livraison, et assumée noir sur blanc.
+## Proxy d'établissement : Basic, ou identifiants Windows
 
 | Ce que le proxy exige | Ce que l'outil fait | Statut |
 | --- | --- | --- |
 | Aucune authentification | WinHTTP et WinINet pointés sur le proxy | pris en charge |
 | **Basic** | relais local qui ajoute `Proxy-Authorization` | pris en charge, prouvé par le banc |
-| **NTLM** | rien : le relais ne négocie pas | **non pris en charge, annoncé** |
-| **Kerberos** | rien : idem | **non pris en charge, annoncé** |
+| **NTLM / Kerberos** (`Negotiate`) | relais local qui delegate les jetons a SSPI | pris en charge, prouvé par le banc |
 
-Pourquoi pas NTLM : c'est un défi en plusieurs messages, lié à la connexion TCP, et .NET
-Framework (celui de PowerShell 5.1) n'expose aucune API qui produise directement un en-tête
-`Proxy-Authorization`. Il faudrait appeler SSPI (`secur32.dll`) à la main — de l'ordre de
-300 à 450 lignes d'interop dans le bloc `Add-Type`, plus un banc NTLM réel (domaine,
-contrôleur, proxy qui négocie) que ce poste n'a pas. Livrer du code d'authentification non
-testé à un lycée coûte plus cher que de nommer la limite : ce qui n'est pas vérifiable ici
-ne part pas.
+Le second mode ne calcule aucun jeton : le relais envoie la requete sans en-tete, lit le
+`407` et son `Proxy-Authenticate: Negotiate`, puis confie le Type1 et le Type2 a
+`NegotiateStream` en memoire — Windows signe avec le compte de la session et rend le Type3.
+Le proxy voit donc le compte ouvre, sans qu'aucun mot de passe ne soit saisi ni enregistre.
+Le handshake tient sur la connexion amont, en trois requetes successives, comme un proxy
+NTLM l'exige.
 
-Ce que l'outil fait à la place, et qui est testé : quand le proxy répond `407` sans
-proposer `Basic`, le test du proxy et le déploiement silencieux **nomment les schémas
-annoncés** (`Proxy-Authenticate`) au lieu d'accuser le mot de passe, et donnent les trois
-issues, dans l'ordre :
+Le banc le prouve : `Banc-ProxyAuthentifie.ps1` monte un proxy qui refuse une requete
+anonyme (`407` + `Negotiate`) et n'accepte que le Type3 ; il verifie que l'identite
+annoncee par le proxy est celle du compte qui execute le banc, et que le corps recu est
+`BANC-OK`.
 
-1. **Dépôt de sources** — télécharger une fois les sources, puis installer depuis le
-   réseau pédagogique : plus aucune authentification proxy en jeu (recommandé) ;
-2. faire ouvrir côté proxy les URL Click-to-Run (`officecdn.microsoft.com`,
-   `config.office.com`) sans mot de passe — la recommandation habituelle pour ODT ;
-3. faire déclarer un compte de service accepté en **Basic** par le proxy.
-
-Aucune de ces issues ne demande d'élévation supplémentaire, et la première existe déjà.
+Ce qui reste hors de portee : un proxy qui n'annonce **que** `NTLM` sans `Negotiate`, et
+les requetes a corps (le relais ne traite que `GET`, `HEAD` et `CONNECT`, ce qui couvre le
+telechargement). Dans ces cas, le mode « Depot de sources » reste l'issue recommandee.
 
 ## Déploiement sans surveillance (GPO, PsExec)
 
@@ -275,7 +294,7 @@ Invoke-PS2EXE -InputFile "Apercu-Maquette.ps1" `
               -Product "InstallOffice" `
               -Description "Installation Office LTSC 2024 et activation KMS" `
               -Company "Lycee Loritz" `
-              -Version "8.5.0.0"
+              -Version "8.5.1.0"
 ```
 
 (`Install-Module ps2exe` si le module est absent.)
@@ -344,11 +363,26 @@ conforme.
 Empreinte du binaire livré, publiée ici pour être comparée sans git :
 
 ```
-SHA256 Install-Office2024-KMS.exe = 8904C8003B9153FF4ECFA8DD593137BDD48EB684773AEB4BC77EC04540552226
+SHA256 Install-Office2024-KMS.exe = F3366F64DCB4E16353EDD6D44615D0E3127872DC6A361513ABB0778D8946473E
 ```
 
 La suite compare cette ligne au fichier livré : une recompilation sans mise à jour du
 README fait échouer le contrôle, et `SHA256SUMS` la reprend dans le ZIP.
+
+### Publication automatique (tag `v*`)
+
+Pousser un tag `v*` déclenche `.github/workflows/publication-livraison.yml` :
+
+1. le tag doit correspondre à `version.txt` (`v8.5.1` pour `8.5.1.0`), sinon le job
+   s'arrête avant de construire quoi que ce soit ;
+2. `New-Livraison.ps1` construit `Livraison.zip` depuis le commit tagué ;
+3. l'archive est extraite dans un dossier de travail et le `Verifier-Livraison.ps1`
+   qu'elle contient est rejoué dessus, comme sur un poste sans git ;
+4. la taille et le SHA-256 du ZIP sont calculés, inscrits dans les notes de release,
+   puis `Livraison.zip` est attaché à la release GitHub du tag.
+
+Un re-run du même tag remplace l'asset (`--clobber`) au lieu d'échouer sur une release
+existante. Le jeton du dépôt suffit : le workflow demande `contents: write`.
 
 ## Journaux et configuration
 
@@ -367,7 +401,7 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps
 embarqué, propriétés de l'EXE, présence des fichiers livrés avec lui et interface ouverte
 hors écran avec chaque nom résolu — soit quelques secondes : c'est exactement ce que lance
 le hook avant chaque commit. Sans commutateur, la
-suite complète (159 cas) tourne, comme sur GitHub.
+suite complète (161 cas) tourne, comme sur GitHub.
 
 Le **dernier contrôle** de la suite relit ce README, y cherche toutes les mentions
 « N cas » et exige qu'elles valent le total réellement exécuté : un cas ajouté ou retiré
@@ -408,7 +442,7 @@ message **RECOMPILER** (section « Compilation de l'EXE »). Si le binaire n'exp
 script en clair (format compressé ou construction différente), l'échec dit que l'empreinte
 n'est **pas vérifiable** — sans conseil de recompilation, qui serait alors trompeur.
 
-Les autres propriétés du binaire livré sont contrôlées aussi : version `8.5.0.0`, titre
+Les autres propriétés du binaire livré sont contrôlées aussi : version `8.5.1.0`, titre
 `Deploiement Office 2024`, produit `InstallOffice`, société `Lycee Loritz` et manifeste
 `requireAdministrator`, plus `OriginalFilename` et `InternalName`, qui doivent porter le nom
 du fichier livré. Chaque écart nomme la valeur trouvée, celle attendue et l'option
@@ -491,7 +525,7 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   ralenti ; `git commit --no-verify` reste possible pour un cas exceptionnel, et se voit
   dans l'historique.
 - **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la suite
-  **complète** (159 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
+  **complète** (161 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
   request : un EXE oublié ou compilé autrement fait échouer la vérification côté serveur,
   même si le hook local n'était pas installé — et sans rien imposer à la boucle locale.
 - **et la recompilation y est vérifiée aussi** : un job à part installe `ps2exe`,
@@ -526,7 +560,7 @@ sources, elle, reste décisive.
 ## Limites connues
 
 - Windows uniquement, architecture 64 bits
-- Proxy authentifié NTLM/Kerberos non pris en charge : seul Basic passe par le relais local (voir ci-dessus)
+- Proxy NTLM/Kerberos : pris en charge par le schéma `Negotiate` ; un proxy qui n'annonce que `NTLM` brut reste hors de portée (voir ci-dessus)
 - Binaire non signé : SmartScreen peut afficher un avertissement
 - L'EXE n'est pas autonome : `Maquette\` et `Install-Office2024-KMS.ps1` doivent rester
   à côté de lui (voir « Ce qu'on copie sur un poste »)

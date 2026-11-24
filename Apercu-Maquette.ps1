@@ -117,7 +117,7 @@ $script:disqueMinGo = 4
 # le README, la suite et Compare-ExeRecompilation la repetent pour l'affichage et le
 # controle : la suite exige qu'elles soient toutes egales, pour qu'un bump oublie
 # quelque part se voie avant la livraison.
-$script:versionOutil = "8.5.0.0"
+$script:versionOutil = "8.5.1.0"
 
 $APPS = @(
     @{ Nom = "Word" ; Cle = "AppWord" ; Libelle = "Word" }
@@ -895,8 +895,8 @@ function Start-RelaisDeploiement {
     # le service Click-to-Run, qui tourne en LocalSystem. Le mot de passe ne quitte pas
     # la memoire du processus. Le port est marque pour que le demarrage suivant sache
     # reconnaitre un relais laisse en place.
-    param($Cfg, [string]$User, [string]$Password)
-    $relais = Start-AuthenticatedProxy -ProxyHost $Cfg.ProxyHost -ProxyPort $Cfg.ProxyPort -User $User -Password $Password
+    param($Cfg, [string]$User, [string]$Password, [switch]$Windows)
+    $relais = Start-AuthenticatedProxy -ProxyHost $Cfg.ProxyHost -ProxyPort $Cfg.ProxyPort -User $User -Password $Password -Windows:$Windows
     Save-RelayPort -Port ([int]$relais.Port)
     $Cfg.ProxyHost = $relais.Host
     $Cfg.ProxyPort = $relais.Port
@@ -915,7 +915,9 @@ function Start-RelaisSilencieux {
             $relais = Start-RelaisDeploiement -Cfg $Cfg -User $Valeurs.ProxyUser -Password $Valeurs.ProxyPassword
             $Contexte.Proxy = $relais.Host + ":" + $relais.Port + " -> " + $relais.Target
         } elseif ($Cfg.ProxyEnabled) {
-            $Contexte.Proxy = $Cfg.ProxyHost + ":" + $Cfg.ProxyPort
+            # Sans identifiants saisis, le relais demande Negotiate et laisse Windows signer.
+            $relais = Start-RelaisDeploiement -Cfg $Cfg -Windows
+            $Contexte.Proxy = $relais.Host + ":" + $relais.Port + " -> " + $relais.Target + " (identifiants Windows)"
         }
         return @{ Code = 0 ; Motif = "" }
     } catch {
@@ -1090,6 +1092,10 @@ function Start-Deploiement {
         if ($cfg.ProxyEnabled -and $Fenetre.FindName("ChampProxyUser").Text.Trim() -ne "") {
             $relais = Start-RelaisDeploiement -Cfg $cfg -User $Fenetre.FindName("ChampProxyUser").Text.Trim() -Password $Fenetre.FindName("ChampProxyPass").Text
             Add-Journal $Fenetre "info" ("Proxy authentifie : relais local " + $relais.Host + ":" + $relais.Port + " vers " + $relais.Target + " (mot de passe non enregistre).")
+        } elseif ($cfg.ProxyEnabled) {
+            # Champs identifiants vides : le relais demande Negotiate et delegue a Windows.
+            $relais = Start-RelaisDeploiement -Cfg $cfg -Windows
+            Add-Journal $Fenetre "info" ("Proxy NTLM/Kerberos : relais local " + $relais.Host + ":" + $relais.Port + " vers " + $relais.Target + " (identifiants Windows de la session).")
         }
 
         Save-ConfigPoste $Fenetre $cfg
@@ -1814,7 +1820,7 @@ $CONFIG_FILE = Join-Path $profilConfig "Office2024Deploy\config.json"
     "Get-RelayMarkerPath", "Save-RelayPort", "Get-RelayPort", "Clear-RelayPort", "Clear-RelayPortIfRestored",
     "Get-ProxyRelaySink", "Get-WinHttpProxyAddress", "Get-InetProxyAddress",
     "Test-ProxyRelayResidue", "Reset-ProxyRelayResidue",
-    "Start-ProxyRelay", "Stop-ProxyRelay", "Start-AuthenticatedProxy",
+    "Start-ProxyRelay", "Start-ProxyRelayWindows", "Stop-ProxyRelay", "Start-AuthenticatedProxy",
     "Protect-SecretText", "Unprotect-SecretText", "Get-Config", "Save-Config"
 ))))
 

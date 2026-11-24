@@ -31,6 +31,9 @@
 #  Office2024 deja installe, RunWorkerCompleted, Form.Shown, IsBusy
 # ================================================================
 
+# Mode lecture seule : verifie le poste et rend un rapport, sans rien installer.
+param([switch]$Diagnostic)
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 # System.Media est fourni par System.dll sur Windows PowerShell; charge optionnel pour compatibilite.
@@ -49,7 +52,7 @@ if ([string]::IsNullOrWhiteSpace($script:ScriptRoot)) { $script:ScriptRoot = $en
 
 # --- Elevation automatique (PS1 uniquement - l'EXE compile a deja le manifest UAC requireAdmin) ---
 $isCompiledExe = ($MyInvocation.MyCommand.CommandType -eq 'Application') -or [string]::IsNullOrWhiteSpace($PSCommandPath)
-if (-not $isCompiledExe) {
+if (-not $isCompiledExe -and -not $Diagnostic) {
     If (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
         [Security.Principal.WindowsBuiltInRole]"Administrator")) {
         Start-Process powershell "-ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs ; Exit
@@ -636,6 +639,333 @@ public class OfficeProxyRelay
     return $relais
 }
 
+# --- Relais "identifiants Windows" (NTLM/Kerberos par SSPI) -----------------
+#  Meme role que le relais Basic, mais sans mot de passe : le relais demande le
+#  schema Negotiate au proxy et delegue les jetons a SSPI (NegotiateStream en
+#  memoire), qui signe avec le compte Windows ouvre la session. Aucun calcul
+#  NTLM n'est ecrit ici : Type1, Type2 et Type3 sortent de Windows.
+#  Le handshake se fait sur la connexion amont, en trois requetes successives
+#  (407 nu, Type1, Type3) : un proxy NTLM garde son etat par connexion.
+function Start-ProxyRelayWindows {
+    param([string]$UpstreamHost, [int]$UpstreamPort)
+    $code = @'
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+
+// Canal en memoire : NegotiateStream y lit et ecrit ses messages, et le relais
+// ne garde que les charges utiles SPNEGO. Les trames de controle de 5 octets
+// (0x16 0x01 0x00 <longueur>) sont ecartees : seul le message SPNEGO nous sert.
+public class CanalSspiRelais : Stream
+{
+    private readonly Queue<byte[]> _entrant = new Queue<byte[]>();
+    private readonly object _verrou = new object();
+    private byte[] _courant;
+    private int _position;
+
+    public override bool CanRead { get { return true; } }
+    public override bool CanSeek { get { return false; } }
+    public override bool CanWrite { get { return true; } }
+    public override long Length { get { return 0; } }
+    public override long Position { get { return 0; } set { } }
+    public override void Flush() { }
+    public override long Seek(long o, SeekOrigin so) { throw new NotSupportedException(); }
+    public override void SetLength(long v) { throw new NotSupportedException(); }
+
+    public void Pousser(byte[] b)
+    {
+        lock (_verrou) { _entrant.Enqueue(b); Monitor.PulseAll(_verrou); }
+    }
+
+    public override int Read(byte[] b, int o, int c)
+    {
+        lock (_verrou)
+        {
+            while (_courant == null || _position >= _courant.Length)
+            {
+                if (_entrant.Count == 0)
+                {
+                    Monitor.Wait(_verrou, 6000);
+                    if (_entrant.Count == 0) { return 0; }
+                }
+                _courant = _entrant.Dequeue(); _position = 0;
+            }
+            int n = Math.Min(c, _courant.Length - _position);
+            Array.Copy(_courant, _position, b, o, n); _position += n;
+            return n;
+        }
+    }
+
+    public List<byte[]> Sorties = new List<byte[]>();
+
+    public override void Write(byte[] b, int o, int c)
+    {
+        byte[] k = new byte[c]; Array.Copy(b, o, k, 0, c);
+        lock (_verrou) { Sorties.Add(k); Monitor.PulseAll(_verrou); }
+    }
+}
+
+// Client SSPI : un seul sens de lecture nous interesse (les jetons sortants).
+public class NegocRelais
+{
+    private readonly CanalSspiRelais _canal = new CanalSspiRelais();
+    private readonly NegotiateStream _nego;
+    public volatile string Erreur = "";
+
+    public NegocRelais()
+    {
+        _nego = new NegotiateStream(_canal, true);
+        Thread t = new Thread(delegate()
+        {
+            try { _nego.AuthenticateAsClient(); }
+            catch (Exception e) { Erreur = e.Message; }
+        });
+        t.IsBackground = true;
+        t.Start();
+    }
+
+    private byte[] Attendre()
+    {
+        for (int i = 0; i < 80; i++)
+        {
+            lock (_canal) { foreach (byte[] k in _canal.Sorties) { if (k.Length > 5) { _canal.Sorties.Clear(); return k; } } }
+            if (Erreur.Length > 0) { break; }
+            Thread.Sleep(100);
+        }
+        return null;
+    }
+
+    public byte[] Premier() { return Attendre(); }
+
+    public byte[] Repondre(byte[] spnego)
+    {
+        byte[] trame = new byte[5];
+        trame[0] = 0x16; trame[1] = 0x01; trame[2] = 0x00;
+        trame[3] = (byte)(spnego.Length >> 8); trame[4] = (byte)(spnego.Length & 0xFF);
+        _canal.Pousser(trame); _canal.Pousser(spnego);
+        return Attendre();
+    }
+}
+
+public class OfficeProxyRelayWindows
+{
+    private readonly string _upHost;
+    private readonly int _upPort;
+    private TcpListener _listener;
+    private Thread _accept;
+    private volatile bool _stopping;
+    private int _port;
+    private int _tunnels;
+    private int _erreurs;
+    private int _authentifies;
+
+    public OfficeProxyRelayWindows(string upstreamHost, int upstreamPort)
+    {
+        _upHost = upstreamHost;
+        _upPort = upstreamPort;
+    }
+
+    public int Port { get { return _port; } }
+    public int Tunnels { get { return _tunnels; } }
+    public int Erreurs { get { return _erreurs; } }
+    public int Authentifies { get { return _authentifies; } }
+
+    public void Start()
+    {
+        _listener = new TcpListener(IPAddress.Loopback, 0);
+        _listener.Start();
+        _port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+        _accept = new Thread(AcceptLoop);
+        _accept.IsBackground = true;
+        _accept.Start();
+    }
+
+    public void Stop()
+    {
+        _stopping = true;
+        try { _listener.Stop(); } catch { }
+        try { _accept.Join(2000); } catch { }
+    }
+
+    private void AcceptLoop()
+    {
+        while (!_stopping)
+        {
+            TcpClient client;
+            try { client = _listener.AcceptTcpClient(); } catch { return; }
+            Thread t = new Thread(delegate() { Serve(client); });
+            t.IsBackground = true;
+            t.Start();
+        }
+    }
+
+    // Une requete, rejouee jusqu'a trois fois sur la meme connexion amont : sans
+    // en-tete, avec le Type1, puis avec le Type3. Le proxy repond 407 tant qu'il
+    // attend un jeton ; des qu'il accepte, sa reponse part telle quelle au client.
+    private void Serve(TcpClient client)
+    {
+        TcpClient up = null;
+        try
+        {
+            client.ReceiveTimeout = 30000;
+            NetworkStream cs = client.GetStream();
+            string entete = LireEntete(cs);
+            string[] parts = entete.Split('\n')[0].TrimEnd('\r').Split(' ');
+            string methode = parts.Length > 0 ? parts[0] : "";
+            bool estConnect = string.Equals(methode, "CONNECT", StringComparison.OrdinalIgnoreCase);
+            if (!estConnect && !string.Equals(methode, "GET", StringComparison.OrdinalIgnoreCase) && !string.Equals(methode, "HEAD", StringComparison.OrdinalIgnoreCase))
+            {
+                Ecrire(cs, "HTTP/1.1 501 Not Implemented\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                Interlocked.Increment(ref _erreurs);
+                return;
+            }
+
+            up = new TcpClient();
+            up.ReceiveTimeout = 30000;
+            up.Connect(_upHost, _upPort);
+            NetworkStream us = up.GetStream();
+
+            string baseEntete = ReecrireEntete(entete);
+            string rep = "";
+            int code = 0;
+            NegocRelais nego = null;
+            for (int tour = 0; tour < 4; tour++)
+            {
+                string envoyee = baseEntete + "Connection: keep-alive\r\n";
+                if (nego != null)
+                {
+                    byte[] jeton = tour == 1 ? nego.Premier() : nego.Repondre(Convert.FromBase64String(DernierJeton(rep)));
+                    if (jeton == null) { throw new IOException("SSPI : aucun jeton (" + nego.Erreur + ")"); }
+                    envoyee += "Proxy-Authorization: Negotiate " + Convert.ToBase64String(jeton) + "\r\n";
+                    if (tour == 2) { Interlocked.Increment(ref _authentifies); }
+                }
+                envoyee += "\r\n";
+                byte[] rb = Encoding.ASCII.GetBytes(envoyee);
+                us.Write(rb, 0, rb.Length); us.Flush();
+                rep = LireEntete(us);
+                code = Code(rep);
+                if (code != 407) { break; }
+                string schema = SchemaNegotiate(rep);
+                if (schema == null) { break; }
+                if (schema.Length == 0)
+                {
+                    if (nego == null) { nego = new NegocRelais(); }
+                    continue;
+                }
+                // Le challenge porte le Type2 : on cree le client SSPI s'il n'existe pas
+                // (proxy qui saute le 407 nu), puis on repond au tour suivant.
+                if (nego == null) { nego = new NegocRelais(); }
+            }
+
+            if (code < 200 || code > 299)
+            {
+                Interlocked.Increment(ref _erreurs);
+                Ecrire(cs, ReecrireEntete(rep) + "Connection: close\r\n\r\n");
+                return;
+            }
+
+            Interlocked.Increment(ref _tunnels);
+            if (estConnect)
+            {
+                Ecrire(cs, "HTTP/1.1 200 Connection established\r\n\r\n");
+                Task a = cs.CopyToAsync(us);
+                Task b = us.CopyToAsync(cs);
+                Task.WaitAny(a, b);
+                return;
+            }
+
+            Ecrire(cs, ReecrireEntete(rep) + "Connection: close\r\n\r\n");
+            Task.WaitAny(us.CopyToAsync(cs));
+        }
+        catch { Interlocked.Increment(ref _erreurs); }
+        finally
+        {
+            try { if (up != null) { up.Close(); } } catch { }
+            try { client.Close(); } catch { }
+        }
+    }
+
+    private static int Code(string rep)
+    {
+        int code = 0;
+        int sp = rep.IndexOf(' ');
+        if (sp > 0 && rep.Length >= sp + 4) { int.TryParse(rep.Substring(sp + 1, 3), out code); }
+        return code;
+    }
+
+    // Rend la valeur du premier Proxy-Authenticate: Negotiate (vide si le proxy
+    // ne propose que le schema nu), null s'il ne propose pas Negotiate.
+    private static string SchemaNegotiate(string rep)
+    {
+        foreach (string l in rep.Split('\n'))
+        {
+            string t = l.TrimEnd('\r');
+            if (!t.StartsWith("Proxy-Authenticate:", StringComparison.OrdinalIgnoreCase)) { continue; }
+            string v = t.Substring(19).Trim();
+            if (v.StartsWith("Negotiate", StringComparison.OrdinalIgnoreCase))
+            {
+                return v.Substring("Negotiate".Length).Trim();
+            }
+        }
+        return null;
+    }
+
+    private static string DernierJeton(string rep) { return SchemaNegotiate(rep) ?? ""; }
+
+    private static string ReecrireEntete(string entete)
+    {
+        StringBuilder sb = new StringBuilder();
+        foreach (string l in entete.Split('\n'))
+        {
+            string t = l.TrimEnd('\r');
+            if (t.Length == 0) { continue; }
+            if (t.StartsWith("Connection:", StringComparison.OrdinalIgnoreCase)) { continue; }
+            if (t.StartsWith("Proxy-Connection:", StringComparison.OrdinalIgnoreCase)) { continue; }
+            if (t.StartsWith("Proxy-Authorization:", StringComparison.OrdinalIgnoreCase)) { continue; }
+            sb.Append(t).Append("\r\n");
+        }
+        return sb.ToString();
+    }
+
+    private static string LireEntete(NetworkStream s)
+    {
+        StringBuilder sb = new StringBuilder();
+        byte[] un = new byte[1];
+        while (sb.Length < 16384)
+        {
+            if (s.Read(un, 0, 1) <= 0) { break; }
+            sb.Append((char)un[0]);
+            if (sb.Length >= 4 && sb[sb.Length - 1] == '\n' && sb[sb.Length - 3] == '\n') { return sb.ToString(); }
+        }
+        throw new IOException("entete incomplet");
+    }
+
+    private static void Ecrire(NetworkStream s, string texte)
+    {
+        try
+        {
+            byte[] b = Encoding.ASCII.GetBytes(texte);
+            s.Write(b, 0, b.Length); s.Flush();
+        }
+        catch { }
+    }
+}
+'@
+    if (-not ("OfficeProxyRelayWindows" -as [type])) {
+        Add-Type -TypeDefinition $code -Language CSharp -ErrorAction Stop
+    }
+    $relais = New-Object -TypeName OfficeProxyRelayWindows -ArgumentList @($UpstreamHost, $UpstreamPort)
+    $relais.Start()
+    $script:ProxyRelay = $relais
+    return $relais
+}
+
 function Stop-ProxyRelay {
     param($Relais)
     foreach ($r in @($Relais, $script:ProxyRelay)) {
@@ -648,11 +978,15 @@ function Stop-ProxyRelay {
 #  Un seul point de passage : le bouton "Tester le proxy" et le deploiement
 #  partagent exactement la meme mise en place.
 function Start-AuthenticatedProxy {
-    param([string]$ProxyHost, [string]$ProxyPort, [string]$User, [string]$Password)
+    param([string]$ProxyHost, [string]$ProxyPort, [string]$User, [string]$Password, [switch]$Windows)
     $port = 0
     if (-not [int]::TryParse($ProxyPort, [ref]$port) -or $port -le 0 -or $port -gt 65535) { throw "Port proxy invalide : $ProxyPort" }
+    if ($Windows) {
+        $relais = Start-ProxyRelayWindows -UpstreamHost $ProxyHost -UpstreamPort $port
+        return @{ Relay = $relais ; Host = "127.0.0.1" ; Port = [string]$relais.Port ; Target = "${ProxyHost}:${port}" ; Mode = "Negotiate" }
+    }
     $relais = Start-ProxyRelay -UpstreamHost $ProxyHost -UpstreamPort $port -User $User -Password $Password
-    @{ Relay = $relais ; Host = "127.0.0.1" ; Port = [string]$relais.Port ; Target = "${ProxyHost}:${port}" }
+    @{ Relay = $relais ; Host = "127.0.0.1" ; Port = [string]$relais.Port ; Target = "${ProxyHost}:${port}" ; Mode = "Basic" }
 }
 
 # --- Genere le contenu XML ODT selon les exclusions ---
@@ -739,6 +1073,123 @@ function Get-Config {
         try { return Get-Content $CONFIG_FILE -Raw | ConvertFrom-Json } catch {}
     }
     return $null
+}
+
+# ================================================================
+#  MODE DIAGNOSTIC (-Diagnostic) : lecture seule, rien n'est installe
+# ================================================================
+#  Meme lecture du poste que le pre-vol de l'interface (Get-PreChecks), plus le
+#  proxy configure, le DNS du KMS et l'horloge. Aucune ecriture, aucune elevation :
+#  lance sans droits administrateur, il dit justement si la session les a.
+function Get-Diagnostic {
+    param([string]$SetupPath = $DEFAULT_SETUP_PATH)
+    $pc  = Get-PreChecks -SetupPath $SetupPath
+    $cfg = Get-Config
+    $items = New-Object System.Collections.ArrayList
+
+    # 1. Espace disque
+    $etat = if ($pc.HasEnoughSpace) { "OK" } else { "BLOQUANT" }
+    [void]$items.Add(@{ Nom = "Espace disque C:" ; Etat = $etat ; Detail = ("{0} Go libres ; minimum {1} Go" -f $pc.FreeGB, $DISK_MIN_GB) })
+
+    # 2. Office deja present
+    if ($pc.HasOffice2024) {
+        $etat = "ATTENTION" ; $detail = ($pc.ExistingOffice + " ; l'outil peut l'activer sans reinstaller")
+    } elseif ($pc.ExistingOffice) {
+        $etat = "ATTENTION" ; $detail = ($pc.ExistingOffice + " ; l'installation peut exiger sa desinstallation")
+    } else {
+        $etat = "OK" ; $detail = "aucune installation Office detectee"
+    }
+    [void]$items.Add(@{ Nom = "Office deja present" ; Etat = $etat ; Detail = $detail })
+
+    # 3. Droits administrateur
+    if ($pc.IsAdmin) { $etat = "OK" ; $detail = "session administrateur" }
+    else { $etat = "ATTENTION" ; $detail = "session standard : l'installation demandera une elevation UAC" }
+    [void]$items.Add(@{ Nom = "Droits administrateur" ; Etat = $etat ; Detail = $detail })
+
+    # 4. Proxy joignable (celui de la configuration, sinon acces direct)
+    $hoteProxy = "" ; $portProxy = 0
+    if ($null -ne $cfg -and $cfg.ProxyEnabled -and -not [string]::IsNullOrWhiteSpace([string]$cfg.ProxyHost)) {
+        $hoteProxy = [string]$cfg.ProxyHost
+        [void][int]::TryParse([string]$cfg.ProxyPort, [ref]$portProxy)
+        if ($portProxy -le 0) { $portProxy = 8080 }
+    }
+    if ($hoteProxy -ne "") {
+        if (-not (Test-TcpPort -Server $hoteProxy -Port $portProxy -TimeoutMs 3000)) {
+            $etat = "ATTENTION" ; $detail = ("proxy " + $hoteProxy + ":" + $portProxy + " injoignable (port ferme ou filtre)")
+        } else {
+            $c = Test-ProxyConnect -ProxyHost $hoteProxy -ProxyPort $portProxy -TargetHost "officecdn.microsoft.com" -TargetPort 443 -TimeoutMs 4000
+            if ($c.OK) { $etat = "OK" ; $detail = ("proxy " + $hoteProxy + ":" + $portProxy + " joignable ; CONNECT officecdn.microsoft.com:443 accepte") }
+            elseif ($c.Code -eq 407) { $etat = "ATTENTION" ; $detail = ("proxy joignable ; 407 (authentification : " + $c.Schemes + ")") }
+            else { $etat = "ATTENTION" ; $detail = ("proxy joignable ; CONNECT refuse : " + $c.Detail) }
+        }
+    } else {
+        $etat = "OK" ; $detail = "aucun proxy dans la configuration ; acces direct"
+    }
+    [void]$items.Add(@{ Nom = "Proxy joignable" ; Etat = $etat ; Detail = $detail })
+
+    # 5. DNS du KMS
+    $kms = $KMS_SERVEUR ; $portKms = $KMS_PORT
+    foreach ($nomChamp in @("KmsHost", "KmsAdresse", "KmsServer")) {
+        if ($null -ne $cfg -and $cfg.PSObject.Properties[$nomChamp] -and -not [string]::IsNullOrWhiteSpace([string]$cfg.$nomChamp)) { $kms = [string]$cfg.$nomChamp ; break }
+    }
+    if ($kms -match '^(?<h>[^:]+):(?<p>\d+)$') { $kms = $Matches.h ; $portKms = $Matches.p }
+    if ($kms -match '(?i)VOTRE-SERVEUR') {
+        $etat = "ATTENTION" ; $detail = ("adresse d'exemple (" + $kms + ") : a remplacer par le KMS du lycee")
+    } else {
+        try {
+            $ips = @([System.Net.Dns]::GetHostAddresses($kms) | ForEach-Object { $_.IPAddressToString })
+            if ($ips.Count -eq 0) { throw "aucune adresse" }
+            $etat = "OK" ; $detail = ("DNS KMS : " + $kms + " -> " + ($ips -join ", ") + " (port " + $portKms + ")")
+        } catch {
+            $etat = "ATTENTION" ; $detail = ("DNS KMS : " + $kms + " introuvable (" + $_.Exception.Message + ") ; l'activation echouera")
+        }
+    }
+    [void]$items.Add(@{ Nom = "DNS KMS" ; Etat = $etat ; Detail = $detail })
+
+    # 6. Horloge
+    $svc = Get-Service w32time -ErrorAction SilentlyContinue
+    $source = ""
+    try {
+        $st = @(& w32tm /query /status 2>$null)
+        $ligneSource = @($st | Where-Object { $_ -match '^\s*Source\s*:' }) | Select-Object -First 1
+        if ($ligneSource) { $source = ($ligneSource -replace '^\s*Source\s*:\s*', '').Trim() }
+    } catch { }
+    $maintenant = Get-Date
+    $fuseau = [System.TimeZoneInfo]::Local
+    $detail = ($maintenant.ToString("dd/MM/yyyy HH:mm") + " (" + $fuseau.Id + ")")
+    if ($source -ne "") { $detail += (" ; source : " + $source) }
+    if ($null -ne $svc) { $detail += (" ; service W32Time : " + $svc.Status) } else { $detail += " ; service W32Time absent" }
+    if ($null -ne $svc -and $svc.Status -eq "Running" -and $maintenant.Year -ge 2024) { $etat = "OK" }
+    else { $etat = "ATTENTION" }
+    [void]$items.Add(@{ Nom = "Horloge" ; Etat = $etat ; Detail = $detail })
+
+    return @{ Items = $items ; Bloquants = @($items | Where-Object { $_.Etat -eq "BLOQUANT" }).Count ; Attentions = @($items | Where-Object { $_.Etat -eq "ATTENTION" }).Count }
+}
+
+function Show-Diagnostic {
+    param([string]$SetupPath = $DEFAULT_SETUP_PATH)
+    $d = Get-Diagnostic -SetupPath $SetupPath
+    [Console]::WriteLine("")
+    [Console]::WriteLine("=== Diagnostic InstallOffice - " + $env:COMPUTERNAME + " - " + (Get-Date).ToString("dd/MM/yyyy HH:mm") + " ===")
+    [Console]::WriteLine("Aucune installation, aucun reglage modifie.")
+    [Console]::WriteLine("")
+    foreach ($i in $d.Items) {
+        $tag = if ($i.Etat -eq "OK") { "[OK]       " } elseif ($i.Etat -eq "ATTENTION") { "[ATTENTION]" } else { "[BLOQUANT] " }
+        [Console]::WriteLine($tag + " " + ([string]$i.Nom).PadRight(24) + " : " + $i.Detail)
+    }
+    [Console]::WriteLine("")
+    if ($d.Bloquants -gt 0) {
+        [Console]::WriteLine("Verdict : " + $d.Bloquants + " point(s) bloquant(s), " + $d.Attentions + " a verifier.")
+        return 1
+    }
+    if ($d.Attentions -gt 0) { [Console]::WriteLine("Verdict : pret a installer sous reserve de " + $d.Attentions + " point(s) a verifier.") }
+    else { [Console]::WriteLine("Verdict : pret a installer.") }
+    return 0
+}
+
+if ($Diagnostic) {
+    $codeDiag = Show-Diagnostic
+    exit $codeDiag
 }
 
 function Protect-SecretText {
@@ -1688,6 +2139,16 @@ $proxyTestBtn.Add_Click({
                 $allOk = $false
                 $lines += "Relais local impossible : $($_.Exception.Message)"
             }
+        } else {
+            # Champs identifiants vides : le relais demande Negotiate et Windows signe.
+            try {
+                $via = Start-AuthenticatedProxy -ProxyHost $h -ProxyPort $p -Windows
+                $relaisTest = $via.Relay ; $hTest = $via.Host ; $pTest = $via.Port
+                $lines += "Relais local $($via.Host):$($via.Port) -> $($via.Target) (identifiants Windows, schema Negotiate)."
+            } catch {
+                $allOk = $false
+                $lines += "Relais local impossible : $($_.Exception.Message)"
+            }
         }
         foreach ($r in (Test-ProxyReadiness -ProxyHost $hTest -ProxyPort $pTest)) {
             if (-not $r.OK) { $allOk = $false }
@@ -1695,7 +2156,7 @@ $proxyTestBtn.Add_Click({
             $lines += "[$mark] $($r.Name)  -  $($r.Detail)"
             if ($r.Code -eq 407) {
                 if (($r.Schemes -ne "") -and ($r.Schemes -notmatch '(?i)Basic')) {
-                    $lines += "       -> 407 : le proxy ne propose pas Basic (schemas annonces : $($r.Schemes)). Le relais ne peut pas repondre a NTLM/Kerberos : utilisez le 'Depot de sources', ou faites ouvrir les URL Click-to-Run cote proxy, ou faites declarer un compte Basic."
+                    $lines += "       -> 407 : le proxy annonce $($r.Schemes). Laissez utilisateur et mot de passe vides pour que le relais demande Negotiate et laisse Windows signer (NTLM/Kerberos) ; sinon renseignez un compte Basic."
                 } elseif ($null -ne $relaisTest) {
                     $lines += "       -> 407 : identifiants refuses par le proxy. Verifiez l'utilisateur et le mot de passe ci-dessus."
                 } else {
@@ -3230,6 +3691,15 @@ function Start-Deployment {
             # reconnaitre un reliquat si le processus est tue avant la restauration.
             Save-RelayPort -Port ([int]$via.Port)
             $logBox.AppendText("[$(Get-Date -Format 'HH:mm:ss')]       Proxy authentifie : relais local $($via.Host):$($via.Port) -> $proxyTargetCfg (mot de passe non enregistre)`n")
+            $logBox.ScrollToCaret()
+        }
+        elseif ($chkUseProxy.Checked -and (-not $chkUseDepot.Checked)) {
+            # Champs identifiants vides : le relais demande Negotiate et Windows signe
+            # avec le compte de la session (NTLM/Kerberos), sans mot de passe saisi.
+            $via = Start-AuthenticatedProxy -ProxyHost $proxyHostCfg -ProxyPort $proxyPortCfg -Windows
+            $proxyHostCfg = $via.Host ; $proxyPortCfg = $via.Port ; $proxyRelayCfg = $true ; $proxyTargetCfg = $via.Target
+            Save-RelayPort -Port ([int]$via.Port)
+            $logBox.AppendText("[$(Get-Date -Format 'HH:mm:ss')]       Proxy NTLM/Kerberos : relais local $($via.Host):$($via.Port) -> $proxyTargetCfg (identifiants Windows)`n")
             $logBox.ScrollToCaret()
         }
 

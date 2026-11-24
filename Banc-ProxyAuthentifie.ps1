@@ -70,17 +70,199 @@ function Import-FonctionMoteur {
     return (@($Noms | ForEach-Object { $defs[$_] }) -join "`r`n`r`n")
 }
 
-. ([scriptblock]::Create((Import-FonctionMoteur $moteur @("Start-ProxyRelay", "Stop-ProxyRelay", "Start-AuthenticatedProxy"))))
+. ([scriptblock]::Create((Import-FonctionMoteur $moteur @("Start-ProxyRelay", "Start-ProxyRelayWindows", "Stop-ProxyRelay", "Start-AuthenticatedProxy"))))
 
 # --- Proxy amont reel et cible locale --------------------------------------
 $code = @'
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+
+// --- Proxy amont qui exige Negotiate (NTLM par SSPI) -----------------------
+//  Le jeton de chaque etape sort de Windows : le banc ne calcule aucun NTLM.
+//  Le role serveur ci-dessous fait le pendant du relais "identifiants Windows".
+public class CanalNeg : Stream
+{
+    private readonly Queue<byte[]> _entrant = new Queue<byte[]>();
+    private readonly object _verrou = new object();
+    private byte[] _courant;
+    private int _position;
+
+    public override bool CanRead { get { return true; } }
+    public override bool CanSeek { get { return false; } }
+    public override bool CanWrite { get { return true; } }
+    public override long Length { get { return 0; } }
+    public override long Position { get { return 0; } set { } }
+    public override void Flush() { }
+    public override long Seek(long o, SeekOrigin so) { throw new NotSupportedException(); }
+    public override void SetLength(long v) { throw new NotSupportedException(); }
+
+    public void Pousser(byte[] b) { lock (_verrou) { _entrant.Enqueue(b); Monitor.PulseAll(_verrou); } }
+
+    public override int Read(byte[] b, int o, int c)
+    {
+        lock (_verrou)
+        {
+            while (_courant == null || _position >= _courant.Length)
+            {
+                if (_entrant.Count == 0)
+                {
+                    Monitor.Wait(_verrou, 6000);
+                    if (_entrant.Count == 0) { return 0; }
+                }
+                _courant = _entrant.Dequeue(); _position = 0;
+            }
+            int n = Math.Min(c, _courant.Length - _position);
+            Array.Copy(_courant, _position, b, o, n); _position += n;
+            return n;
+        }
+    }
+
+    public List<byte[]> Sorties = new List<byte[]>();
+
+    public override void Write(byte[] b, int o, int c)
+    {
+        byte[] k = new byte[c]; Array.Copy(b, o, k, 0, c);
+        lock (_verrou) { Sorties.Add(k); Monitor.PulseAll(_verrou); }
+    }
+}
+
+public class RoleNegSrv
+{
+    private readonly CanalNeg _canal = new CanalNeg();
+    private readonly NegotiateStream _nego;
+    public volatile string Erreur = "";
+    public volatile bool Fini = false;
+    public volatile string Identite = "";
+
+    public RoleNegSrv()
+    {
+        _nego = new NegotiateStream(_canal, true);
+        Thread t = new Thread(delegate()
+        {
+            try { _nego.AuthenticateAsServer(); Identite = _nego.RemoteIdentity != null ? _nego.RemoteIdentity.Name : "-"; Fini = true; }
+            catch (Exception e) { Erreur = e.Message; }
+        });
+        t.IsBackground = true;
+        t.Start();
+    }
+
+    public byte[] Attendre()
+    {
+        for (int i = 0; i < 80; i++)
+        {
+            lock (_canal) { foreach (byte[] k in _canal.Sorties) { if (k.Length > 5) { _canal.Sorties.Clear(); return k; } } }
+            if (Fini || Erreur.Length > 0) { break; }
+            Thread.Sleep(100);
+        }
+        return null;
+    }
+
+    public void Envoyer(byte[] sp)
+    {
+        byte[] trame = new byte[5];
+        trame[0] = 0x16; trame[1] = 0x01; trame[2] = 0x00;
+        trame[3] = (byte)(sp.Length >> 8); trame[4] = (byte)(sp.Length & 0xFF);
+        _canal.Pousser(trame); _canal.Pousser(sp);
+    }
+}
+
+public class BancProxyNego
+{
+    private TcpListener _l;
+    private Thread _t;
+    public int Port;
+    public string Journal = "";
+    public string Identite = "";
+    public bool JetonNtlm = false;
+
+    public void Start()
+    {
+        _l = new TcpListener(IPAddress.Loopback, 0);
+        _l.Start();
+        Port = ((IPEndPoint)_l.LocalEndpoint).Port;
+        _t = new Thread(Loop); _t.IsBackground = true; _t.Start();
+    }
+
+    public void Stop() { try { _l.Stop(); } catch { } }
+
+    private void Loop()
+    {
+        while (true)
+        {
+            TcpClient c;
+            try { c = _l.AcceptTcpClient(); } catch { return; }
+            Thread th = new Thread(delegate() { Serve(c); });
+            th.IsBackground = true; th.Start();
+        }
+    }
+
+    private static string Champ(string e, string nom)
+    {
+        foreach (string l in e.Split('\n'))
+        {
+            string t = l.TrimEnd('\r');
+            if (t.StartsWith(nom + ":", StringComparison.OrdinalIgnoreCase)) { return t.Substring(nom.Length + 1).Trim(); }
+        }
+        return null;
+    }
+
+    private static void Rep(NetworkStream s, string t)
+    {
+        byte[] b = Encoding.ASCII.GetBytes(t);
+        try { s.Write(b, 0, b.Length); s.Flush(); } catch { }
+    }
+
+    private void Serve(TcpClient c)
+    {
+        try
+        {
+            NetworkStream s = c.GetStream(); s.ReadTimeout = 8000;
+            RoleNegSrv role = new RoleNegSrv();
+            for (int tour = 0; tour < 4; tour++)
+            {
+                string h = BancReseau.LireEntete(s);
+                if (h.Length == 0) { return; }
+                string a = Champ(h, "Proxy-Authorization");
+                if (a == null)
+                {
+                    Journal += "[sans-jeton]";
+                    Rep(s, "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Negotiate\r\nContent-Length: 0\r\n\r\n");
+                    continue;
+                }
+                byte[] sp = Convert.FromBase64String(a.Substring(a.IndexOf(' ') + 1));
+                // Le schema est Negotiate, mais le jeton doit bien etre du NTLM (SPNEGO).
+                if (Encoding.ASCII.GetString(sp).Contains("NTLMSSP")) { JetonNtlm = true; }
+                role.Envoyer(sp);
+                for (int w = 0; w < 30 && !role.Fini && role.Erreur.Length == 0; w++) { Thread.Sleep(100); }
+                if (role.Fini)
+                {
+                    Identite = role.Identite;
+                    Journal += "[AUTH " + role.Identite + "]";
+                    Rep(s, "HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\nBANC-OK!!");
+                    return;
+                }
+                byte[] rep = role.Attendre();
+                if (rep == null)
+                {
+                    Journal += "[echec " + role.Erreur + "]";
+                    Rep(s, "HTTP/1.1 500 Echec\r\nContent-Length: 0\r\n\r\n");
+                    return;
+                }
+                Journal += "[defi]";
+                Rep(s, "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Negotiate " + Convert.ToBase64String(rep) + "\r\nContent-Length: 0\r\n\r\n");
+            }
+        }
+        catch (Exception e) { Journal += "[exc " + e.Message + "]"; }
+        finally { try { c.Close(); } catch { } }
+    }
+}
 
 public static class BancReseau
 {
@@ -461,6 +643,28 @@ function Invoke-EchangeBanc {
     return $r
 }
 
+# --- Requete brute, sans relais (pour prouver qu'un proxy exige) -------------
+function Invoke-ProxyBrut {
+    param([int]$Port, [string]$Demande)
+    $r = @{ Statut = "" ; Entete = "" }
+    $c = $null
+    try {
+        $c = New-Object System.Net.Sockets.TcpClient
+        $c.Connect("127.0.0.1", $Port)
+        $f = $c.GetStream()
+        $b = [System.Text.Encoding]::ASCII.GetBytes($Demande)
+        $f.Write($b, 0, $b.Length) ; $f.Flush()
+        $e = [BancReseau]::LireEntete($f)
+        $r.Entete = $e
+        $r.Statut = ($e -split "`r`n")[0].Trim()
+    } catch {
+        $r.Statut = "erreur " + $_.Exception.Message
+    } finally {
+        if ($c) { try { $c.Close() } catch { } }
+    }
+    return $r
+}
+
 # --- Deroulement ------------------------------------------------------------
 $dossier = Join-Path $env:TEMP ("banc_proxy_" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Path $dossier -Force | Out-Null
@@ -513,6 +717,20 @@ try {
     $tests += [ordered]@{ Nom = "proxy NTLM seul : le 407 et son schema remontent" ; Ok = (($d.Statut -match " 407 ") -and ($d.Entete -match '(?i)Proxy-Authenticate:\s*NTLM')) ; Statut = $d.Statut ; Detail = "le diagnostic peut nommer NTLM au lieu d'accuser le mot de passe" }
     Stop-ProxyRelay -Relais $relaisNtlm
     $ntlm.Stop()
+
+    # 5. Proxy qui exige Negotiate : le relais "identifiants Windows" delegue le
+    #    Type1 et le Type3 a SSPI, et le proxy voit le compte ouvre de la session.
+    #    Aucun mot de passe n'est saisi : c'est Windows qui signe.
+    $nego = New-Object BancProxyNego
+    $nego.Start()
+    $relaisWin = Start-AuthenticatedProxy -ProxyHost "127.0.0.1" -ProxyPort ([string]$nego.Port) -Windows
+    $w = Invoke-EchangeBanc -PortRelais ([int]$relaisWin.Port) -Demande ("GET http://nexus.local/banc HTTP/1.1`r`nHost: nexus.local`r`nConnection: close`r`n`r`n")
+    $moi = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $tests += [ordered]@{ Nom = "proxy Negocier : le relais s'authentifie avec le compte Windows" ; Ok = (($w.Corps -match "BANC-OK") -and ($nego.Identite -eq $moi) -and $nego.JetonNtlm) ; Statut = $w.Statut ; Detail = "proxy a authentifie " + $nego.Identite + " ; attendu " + $moi + " ; jeton NTLMSSP=" + $nego.JetonNtlm }
+    $direct = Invoke-ProxyBrut -Port ([int]$nego.Port) -Demande ("GET http://nexus.local/banc HTTP/1.1`r`nHost: nexus.local`r`nConnection: close`r`n`r`n")
+    $tests += [ordered]@{ Nom = "proxy Negocier : sans relais, il refuse (407 + Negotiate)" ; Ok = (($direct.Statut -match " 407 ") -and ($direct.Entete -match '(?i)Proxy-Authenticate:\s*Negotiate')) ; Statut = $direct.Statut ; Detail = "le proxy n'accepte pas une requete anonyme : l'authentification est bien exigee" }
+    Stop-ProxyRelay -Relais $relaisWin
+    $nego.Stop()
 
     # 5. Connexion reutilisee : le relais ferme proprement (Connection: close) au lieu de
     #    laisser repartir une requete sans en-tete ; la requete suivante, sur une
