@@ -4,6 +4,9 @@ _*.ps1
 _layout.txt
 *.log
 
+# ZIP de livraison : construit par New-Livraison.ps1, jamais commite.
+Livraison.zip
+
 # L'Office Deployment Tool est versionne (setup.exe, 16.0.18129.20030, signe Microsoft)
 # pour que le ZIP du depot soit utilisable tel quel, sans telechargement supplementaire.
 # Mise a jour : remplacer le fichier par celui du lien Microsoft (README), puis

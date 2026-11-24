@@ -36,6 +36,33 @@ jobs:
             throw "Test-InstallOffice.ps1 a echoue (code $code) : EXE desynchronise ou mal compile."
           }
 
+  recompilation:
+    name: Recompilation (script embarque et proprietes)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+
+      - name: Installer ps2exe
+        shell: powershell
+        run: |
+          Install-Module ps2exe -Scope CurrentUser -Force -AllowClobber
+
+      # Recompile Apercu-Maquette.ps1 avec la commande du README et compare au binaire
+      # commite : script embarque (SHA-256) et proprietes, jamais les octets (PS2EXE
+      # n'est pas reproductible). C'est ce qui attrape un binaire compile depuis un autre
+      # script ou avec d'autres options, la ou l'empreinte interne reste coherente.
+      - name: Recompiler et comparer au binaire commite
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          & powershell -NoProfile -ExecutionPolicy Bypass -File .\Compare-ExeRecompilation.ps1
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            throw "L'EXE commite n'embarque pas Apercu-Maquette.ps1 du depot, ou ses proprietes ne sont pas celles de la commande documentee (code $code) : recompiler avec la commande du README et commiter le binaire."
+          }
+
   fins-de-ligne:
     name: Contrat de fins de ligne (core.autocrlf=false)
     runs-on: windows-latest

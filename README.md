@@ -28,7 +28,9 @@ Le dossier extrait contient tout : le programme, ses fenêtres (`Maquette\`), le
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `Install-Office2024-KMS.ps1` | Moteur : déroulé de déploiement extrait par l'EXE ; son interface WinForms historique reste exécutable telle quelle |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (113 cas, `-Fast` pour la section 1 seule) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (124 cas, `-Fast` pour la section 1 seule) |
+| `New-Livraison.ps1` | Construit `Livraison.zip` en liste blanche, avec `SHA256SUMS` |
+| `Verifier-Livraison.ps1` | Vérificateur livré dans le ZIP : à lancer sur un poste, sans git |
 | `.githooks/pre-commit` | Contrôle rapide de l'index avant chaque commit, refuse l'EXE désynchronisé |
 | `.github/workflows/controle-exe.yml` | Suite complète + contrat de fins de ligne (checkout sans conversion) sur GitHub Actions, à chaque push sur `main` et à chaque pull request |
 | `setup.exe` | Office Deployment Tool (16.0.18129.20030, signé Microsoft) — versionné pour que le ZIP soit utilisable tel quel |
@@ -121,6 +123,13 @@ Invoke-PS2EXE -InputFile "Apercu-Maquette.ps1" `
 
 (`Install-Module ps2exe` si le module est absent.)
 
+La CI recompile ce script et compare le résultat au binaire committé : le script embarqué
+doit être identique, et les propriétés du fichier (titre, produit, société, version,
+manifeste `requireAdministrator`) doivent être celles de la commande ci-dessus. Les octets
+des deux EXE ne sont jamais comparés — PS2EXE n'est pas reproductible. Un binaire compilé
+depuis un autre script, ou avec d'autres options, échoue donc côté serveur même si son
+empreinte interne est cohérente.
+
 Le binaire garde le nom `Install-Office2024-KMS.exe` : les raccourcis et la documentation
 restent valables, et l'interface WinForms historique peut être retirée sans changer les
 postes. Le script embarqué est `Apercu-Maquette.ps1` — c'est son empreinte qui est
@@ -131,6 +140,39 @@ Compiler **directement** vers `Install-Office2024-KMS.exe` : PS2EXE reprend le n
 fichier de sortie dans `OriginalFilename`/`InternalName`, or le contrôle vérifie que ces
 champs valent bien `Install-Office2024-KMS.exe` (compiler vers un fichier temporaire puis le
 renommer laisse `_b.exe` dans les propriétés).
+
+## Livraison : le ZIP, son empreinte, son vérificateur
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\New-Livraison.ps1
+```
+
+Construit `Livraison.zip` à partir d'une **liste blanche** : les quatre éléments livrés,
+`README.md`, `Verifier-Livraison.ps1` et un `SHA256SUMS` calculé au passage. Rien d'autre
+n'entre — ni `config.json` (il livrerait le serveur KMS et les chemins du poste), ni
+journal, ni sources `Office\`, ni la suite de tests, qui a besoin du dépôt. La suite
+construit le ZIP dans un dossier de travail et le vérifie : éléments présents, aucun
+fichier local, `SHA256SUMS` exact, puis le vérificateur rejoué sur l'archive extraite.
+
+Sur un poste sans git, après extraction :
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Verifier-Livraison.ps1
+```
+
+Il recompte les empreintes de `SHA256SUMS`, vérifie les cinq XAML, la signature Microsoft
+de `setup.exe`, le nom et le produit de l'EXE, et l'absence de `config.json` ou de journal
+dans le dossier. Rien n'est installé ni modifié ; code de sortie 0 si la livraison est
+conforme.
+
+Empreinte du binaire livré, publiée ici pour être comparée sans git :
+
+```
+SHA256 Install-Office2024-KMS.exe = 292EFCBE527EC93A001909ACC2D534C361FEF6143DCD3FB9B1446296DDDADC90
+```
+
+La suite compare cette ligne au fichier livré : une recompilation sans mise à jour du
+README fait échouer le contrôle, et `SHA256SUMS` la reprend dans le ZIP.
 
 ## Journaux et configuration
 
@@ -146,9 +188,10 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps
 ```
 
 `-Fast` ne joue que la section 1 — syntaxe de l'interface et du moteur, empreinte du script
-embarqué, propriétés de l'EXE et présence des fichiers livrés avec lui — soit quelques
-secondes : c'est exactement ce que lance le hook avant chaque commit. Sans commutateur, la
-suite complète (113 cas) tourne, comme sur GitHub.
+embarqué, propriétés de l'EXE, présence des fichiers livrés avec lui et interface ouverte
+hors écran avec chaque nom résolu — soit quelques secondes : c'est exactement ce que lance
+le hook avant chaque commit. Sans commutateur, la
+suite complète (124 cas) tourne, comme sur GitHub.
 
 Le **dernier contrôle** de la suite relit ce README, y cherche toutes les mentions
 « N cas » et exige qu'elles valent le total réellement exécuté : un cas ajouté ou retiré
@@ -161,6 +204,13 @@ comparées au pixel aux PNG livrés. Cette comparaison dépendant des polices du
 référence périmée est détectée même là où le rendu diffère, et le pixel ne tranche que sur
 une pile de polices identique à celle des références. Après régénération des PNG :
 `Test-InstallOffice.ps1 -EnregistrerCaptures`.
+
+Et l'interface est vérifiée **à l'exécution** : l'EXE livré (ou, sans droits administrateur,
+le script qu'il embarque, le binaire portant un manifeste `requireAdministrator`) est lancé
+avec un commutateur caché, `-VerifierInterface`, qui charge les cinq XAML, ouvre les
+fenêtres hors écran et résout chaque nom que le script demande à la fenêtre. Un nom présent
+dans le XAML mais placé dans un modèle ou un dictionnaire de ressources ne s'y résout pas :
+ni l'empreinte des sources ni le contrôle statique des noms ne peuvent le voir.
 
 Avant livraison, la suite exporte le dépôt (`git archive HEAD`, l'archive que sert le
 bouton **Code → Download ZIP**), vérifie qu'elle contient `Maquette\`, le moteur et
@@ -265,9 +315,14 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   ralenti ; `git commit --no-verify` reste possible pour un cas exceptionnel, et se voit
   dans l'historique.
 - **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la suite
-  **complète** (113 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
+  **complète** (124 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
   request : un EXE oublié ou compilé autrement fait échouer la vérification côté serveur,
   même si le hook local n'était pas installé — et sans rien imposer à la boucle locale.
+- **et la recompilation y est vérifiée aussi** : un job à part installe `ps2exe`,
+  recompile `Apercu-Maquette.ps1` avec la commande documentée et compare au binaire
+  committé le script embarqué (SHA-256) et les propriétés du fichier — jamais les octets,
+  PS2EXE n'est pas reproductible. Un EXE compilé depuis un autre script, ou avec d'autres
+  options, échoue donc côté serveur même quand son empreinte interne est cohérente.
 - **le contrat de fins de ligne y est vérifié aussi** : un second job refait un checkout
   avec `core.autocrlf=false` et `core.eol=lf`, puis lance le contrôle rapide. Sans la
   déclaration `*.ps1 text eol=crlf`, il recevrait des `.ps1` en LF et échouerait ; le run

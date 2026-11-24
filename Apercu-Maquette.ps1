@@ -51,7 +51,12 @@ param(
     [ValidatePattern("^(\d{2}:\d{2}:\d{2})?$")]
     [string]$Horloge = "",
     [switch]$Mesure,
-    [int]$Etape = 7
+    [int]$Etape = 7,
+    # Commutateurs caches (suite de contole) : voir plus bas, "Verification de
+    # l'interface". -VerifierInterface porte la liste des noms attendus, -RapportInterface
+    # le fichier ou ecrire le resultat (a cote de la liste par defaut).
+    [string]$VerifierInterface = "",
+    [string]$RapportInterface = ""
 )
 
 # Journal : en capture l'heure est figee (16:30:22 par defaut, plus 7 s par ligne,
@@ -1286,6 +1291,61 @@ function Set-FocusCapture {
     }
     $controle.SetValue((Get-CleEtatNommee "IsKeyboardFocusWithin"), $true)
     $controle.SetValue((Get-CleEtatNommee "IsKeyboardFocused"), $true)
+}
+
+# --- Verification de l'interface a l'execution (controle automatise) --------
+# Commutateur cache, absent du mode d'emploi : la suite lui donne le fichier des noms que
+# le script demande a la fenetre. Ce mode charge les cinq XAML, ouvre les fenetres hors
+# ecran (position negative, pas de barre de taches, placement manuel pour que
+# CenterScreen ne les ramene pas au milieu) et verifie que chaque nom s'y resout
+# vraiment. Un nom present dans le XAML mais place dans un modele ou un dictionnaire de
+# ressources ne se resout pas a l'execution : c'est ce que le controle statique ne voit
+# pas. Le rapport est ecrit dans le fichier demande ; code de sortie 0 si tout se resout.
+if ($VerifierInterface -ne "") {
+    if ($RapportInterface -eq "") { $RapportInterface = $VerifierInterface + ".rapport" }
+    $fichiersInterface = @("Principal.xaml", "ReliquatProxy.xaml", "Applications.xaml", "Etats.xaml", "Styles.xaml")
+    $lignesRapport = New-Object System.Collections.Generic.List[string]
+    $fenetres = @()
+    $charges = @()
+    foreach ($f in $fichiersInterface) {
+        try {
+            $o = Import-Xaml $f
+            $charges += $f
+            if ($o -is [System.Windows.Window]) { $fenetres += $o }
+        } catch {
+            $lignesRapport.Add("CHARGEMENT " + $f + " : " + $_.Exception.Message)
+        }
+    }
+    foreach ($w in $fenetres) {
+        try {
+            $w.WindowStartupLocation = [System.Windows.WindowStartupLocation]::Manual
+            $w.Left = -32000
+            $w.Top = -32000
+            $w.ShowInTaskbar = $false
+            $w.Show()
+            $w.UpdateLayout()
+        } catch {
+            $lignesRapport.Add("OUVERTURE " + $w.GetType().Name + " : " + $_.Exception.Message)
+        }
+    }
+    $attendus = @([System.IO.File]::ReadAllLines($VerifierInterface) |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -ne "" -and -not $_.StartsWith("#") })
+    $resolus = 0
+    foreach ($nom in $attendus) {
+        $trouve = $false
+        foreach ($w in $fenetres) {
+            if ($null -ne $w.FindName($nom)) { $trouve = $true ; break }
+        }
+        if ($trouve) { $resolus++ } else { $lignesRapport.Add("ABSENT " + $nom) }
+    }
+    foreach ($w in $fenetres) { try { $w.Close() } catch { } }
+    $lignesRapport.Add("fichiers : " + $charges.Count + "/" + $fichiersInterface.Count + " (" + ($charges -join ", ") + ")")
+    $lignesRapport.Add("fenetres : " + $fenetres.Count + " ouverte(s) hors ecran")
+    $lignesRapport.Add("interface : " + $resolus + "/" + $attendus.Count + " noms resolus")
+    [System.IO.File]::WriteAllLines($RapportInterface, $lignesRapport, (New-Object System.Text.UTF8Encoding($false)))
+    if (($resolus -eq $attendus.Count) -and ($attendus.Count -gt 0) -and ($charges.Count -eq $fichiersInterface.Count)) { exit 0 }
+    exit 1
 }
 
 # --- Mode capture : rendu hors ecran, aucun affichage ----------------------

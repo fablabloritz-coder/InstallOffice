@@ -275,6 +275,40 @@ try {
     $enregistrePass = [regex]::Matches($src, 'ProxyPass\w*\s*=').Count
     Check "proxy authentifie : mot de passe jamais enregistre" ($enregistreUser -and ($enregistrePass -eq 0)) ("ProxyUser enregistre=" + $enregistreUser + " affectations de mot de passe=" + $enregistrePass)
 
+    # Contrat des noms : tout nom que le script demande a la fenetre (FindName) doit exister
+    # dans l'un des cinq XAML. Un nom disparu ne se voit ni a la compilation ni au chargement
+    # du XAML : la ligne d'interface reste muette, ou le script jette au moment de l'afficher.
+    # Les noms construits (Ico$Ligne, Etape$Index, Glyphe$($script:etapeEncours)...) sont
+    # verifies par leur prefixe, seul element stable d'un nom assemble.
+    # Le dossier est teste avant d'etre lu : sans lui, Get-ChildItem leve et le harnais
+    # s'arrete sur une erreur qui ne dit rien du contrat des noms.
+    $dossierXaml = Join-Path $PSScriptRoot "Maquette"
+    $nomsXaml = @()
+    if (Test-Path -LiteralPath $dossierXaml -PathType Container) {
+        foreach ($fXaml in @(Get-ChildItem -LiteralPath $dossierXaml -Filter "*.xaml" | Sort-Object Name)) {
+            foreach ($m in [regex]::Matches([System.IO.File]::ReadAllText($fXaml.FullName), 'x:Name\s*=\s*([''"])([^''"]+)\1')) { $nomsXaml += $m.Groups[2].Value }
+        }
+    }
+    $nomsXaml = @($nomsXaml | Sort-Object -Unique)
+    # Les espaces et les guillemets simples sont toleres : FindName( "X" ) est la meme chose
+    # que FindName("X"), et un nom ecrit ainsi ne doit pas echapper au contrat.
+    $refsXaml = @([regex]::Matches($src, 'FindName\(\s*([''"])([^''"]+)\1\s*\)') | ForEach-Object { $_.Groups[2].Value } | Sort-Object -Unique)
+    $nomsManquants = @() ; $prefixesManquants = @()
+    foreach ($r in $refsXaml) {
+        if ($r -match '\$') {
+            $prefixe = ($r -split '\$')[0]
+            if (@($nomsXaml | Where-Object { $_.StartsWith($prefixe) }).Count -eq 0) { $prefixesManquants += $prefixe }
+        } elseif ($nomsXaml -notcontains $r) { $nomsManquants += $r }
+    }
+    $nomsManquants = @($nomsManquants | Sort-Object -Unique)
+    $prefixesManquants = @($prefixesManquants | Sort-Object -Unique)
+    # Un motif casse rendrait ce controle vide : il passerait en ne verifiant rien. Le
+    # plancher sur le nombre de references lues l'interdit (63 aujourd'hui).
+    $detailNoms = "absents des XAML=" + ($nomsManquants -join ", ") + " | prefixes sans aucun nom=" + ($prefixesManquants -join ", ") + " | references lues=" + $refsXaml.Count + ", noms XAML=" + $nomsXaml.Count
+    if (-not (Test-Path -LiteralPath $dossierXaml)) { $detailNoms += " | dossier Maquette absent" }
+    if ($refsXaml.Count -lt 20) { $detailNoms += " | moins de 20 FindName lus : motif de lecture casse, le controle ne verifierait rien" }
+    Check "noms XAML : chaque FindName du script existe dans les cinq XAML" (($nomsManquants.Count -eq 0) -and ($prefixesManquants.Count -eq 0) -and ($refsXaml.Count -ge 20) -and ($nomsXaml.Count -gt 0)) ($detailNoms + " - renommer le XAML ou corriger le FindName")
+
     # Fins de ligne : l'EXE embarque le script tel qu'il est sur le poste, en
     # CRLF, et le controle compare des octets. Un clone en LF doit donc etre
     # signale ici, avec sa cause, plutot que par un faux "RECOMPILER" plus bas.
@@ -390,6 +424,89 @@ try {
         Check "livraison : setup.exe a cote de l'EXE" (Test-Path -LiteralPath $setupPath) "setup.exe absent : un dossier extrait sans l'Office Deployment Tool ne peut rien installer (livrer setup.exe avec l'EXE, README section Demarrage rapide)"
     }
 
+    # Interface a l'execution : l'EXE livre (ou, sans droits administrateur, le script
+    # qu'il embarque) ouvre les quatre fenetres et Styles.xaml hors ecran et resout
+    # chaque nom que le script demande. La liste attendue vient du source : les noms
+    # litteraux des FindName, plus les noms assembles dont les suffixes sont les
+    # litteraux des appels (Ico/Val par ligne de pre-vol, Etape/Glyphe/Titre/Etat 1 a 5).
+    # Un nom present dans le XAML mais place dans un modele ou un dictionnaire de
+    # ressources ne se resout pas a l'execution : ni l'empreinte des sources ni le
+    # controle statique ne peuvent le voir.
+    $nomsAttendus = @($refsXaml | Where-Object { $_ -notmatch '\$' })
+    $suffixesConnus = @{
+        "Ico"    = @("Setup", "Disque", "Kms", "Windows")
+        "Val"    = @("Setup", "Disque", "Kms", "Windows")
+        "Etape"  = @("1", "2", "3", "4", "5")
+        "Glyphe" = @("1", "2", "3", "4", "5")
+        "Titre"  = @("1", "2", "3", "4", "5")
+        "Etat"   = @("1", "2", "3", "4", "5")
+    }
+    $prefixesNonCouvers = @()
+    foreach ($r in @($refsXaml | Where-Object { $_ -match '\$' })) {
+        $p = ($r -split '\$')[0]
+        if ($suffixesConnus.ContainsKey($p)) { foreach ($s in $suffixesConnus[$p]) { $nomsAttendus += ($p + $s) } }
+        else { $prefixesNonCouvers += $p }
+    }
+    $nomsAttendus = @($nomsAttendus | Sort-Object -Unique)
+    # La liste attendue est ecrite ici, le mode verificateur la lit et ecrit son rapport
+    # dans un second fichier : les deux ne se recouvrent jamais.
+    $listeInterface = Join-Path $Work "interface_noms.txt"
+    $rapportInterface = Join-Path $Work "interface_rapport.txt"
+    if (Test-Path -LiteralPath $rapportInterface) { Remove-Item -LiteralPath $rapportInterface -Force }
+    [System.IO.File]::WriteAllLines($listeInterface, $nomsAttendus, (New-Object System.Text.UTF8Encoding($false)))
+    $lignesInterface = @()
+    $codeInterface = -1
+    $lancePar = ""
+    $estAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")
+    # Le binaire livre porte un manifeste requireAdministrator : sans elevation, Windows
+    # refuse de le demarrer (code 740). La CI et un poste administrateur lancent l'EXE ;
+    # ailleurs, le script extrait du binaire est joue a sa place, memes XAML.
+    if ($estAdmin -and (Test-Path -LiteralPath $exePath)) {
+        $eapIf = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $sortieIf = (& $exePath "-VerifierInterface" $listeInterface "-RapportInterface" $rapportInterface 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+        $codeInterface = $LASTEXITCODE
+        $ErrorActionPreference = $eapIf
+        $lancePar = "EXE livre"
+    }
+    if (-not (Test-Path -LiteralPath $rapportInterface)) {
+        $dossierVerif = Join-Path $Work "verif"
+        New-Item -ItemType Directory -Path $dossierVerif -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Maquette") -Destination (Join-Path $dossierVerif "Maquette") -Recurse -Force
+        $scriptVerif = Join-Path $dossierVerif "Apercu-Maquette.ps1"
+        if ($null -ne $embarque) {
+            [System.IO.File]::WriteAllBytes($scriptVerif, $embarque)
+            $lancePar = "script embarque dans l'EXE"
+        } else {
+            Copy-Item -LiteralPath $MainScript -Destination $scriptVerif -Force
+            $lancePar = "script de la copie de travail (EXE illisible)"
+        }
+        $eapIf = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $sortieIf = (& $psHost -NoProfile -STA -ExecutionPolicy Bypass -File $scriptVerif "-VerifierInterface" $listeInterface "-RapportInterface" $rapportInterface 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+        $codeInterface = $LASTEXITCODE
+        $ErrorActionPreference = $eapIf
+    }
+    if (Test-Path -LiteralPath $rapportInterface) { $lignesInterface = @([System.IO.File]::ReadAllLines($rapportInterface)) }
+    $resumeIf = @($lignesInterface | Where-Object { $_ -match '^interface : (\d+)/(\d+) noms resolus' })
+    $ecartsIf = @($lignesInterface | Where-Object { $_ -match '^(ABSENT|CHARGEMENT|OUVERTURE) ' })
+    $fichiersIf = @($lignesInterface | Where-Object { $_ -match '^fichiers : 5/5 ' })
+    $resolusIf = -1 ; $verifiesIf = -1
+    if ($resumeIf.Count -eq 1) {
+        if ($resumeIf[0] -match '^interface : (\d+)/(\d+) noms resolus') { $resolusIf = [int]$matches[1] ; $verifiesIf = [int]$matches[2] }
+    }
+    $okIf = ($codeInterface -eq 0) -and ($ecartsIf.Count -eq 0) -and ($fichiersIf.Count -eq 1) -and
+            ($resolusIf -eq $verifiesIf) -and ($verifiesIf -eq $nomsAttendus.Count) -and
+            ($nomsAttendus.Count -gt 0) -and ($prefixesNonCouvers.Count -eq 0)
+    $detailIf = $lancePar + " (code " + $codeInterface + ") : " + $resolusIf + "/" + $verifiesIf + " noms resolus, " + $nomsAttendus.Count + " attendus ; cinq XAML charges=" + ($fichiersIf.Count -eq 1) + " ; rapport=" + $rapportInterface
+    if ($ecartsIf.Count -gt 0) { $detailIf += " ; " + ($ecartsIf -join " ; ") }
+    if ($prefixesNonCouvers.Count -gt 0) { $detailIf += " ; prefixe dynamique sans suffixe connu, etendre la liste du controle : " + ($prefixesNonCouvers -join ", ") }
+    if (-not (Test-Path -LiteralPath $rapportInterface)) { $detailIf += " ; aucun rapport ecrit ; sortie=[" + $sortieIf + "]" }
+    Check "EXE livre : fenetres hors ecran, chaque nom d'interface resolu" $okIf $detailIf
+    if ($lancePar -ne "EXE livre") {
+        Write-Host ("         " + $lancePar + " joue a la place de l'EXE : sans droits administrateur, un binaire a manifeste requireAdministrator ne demarre pas (code 740). La CI et un poste administrateur lancent l'EXE.") -ForegroundColor Yellow
+    }
+
     # Mode rapide : le hook pre-commit ne doit pas couter la suite entiere.
     # La section 1 est justement ce qui decide si l'EXE livre est a jour.
     if ($Fast) {
@@ -466,6 +583,56 @@ try {
     $detailCaptures = if ($ecartsCapture.Count -eq 0) { "references a jour du XAML et rendu identique" }
                       else { ($ecartsCapture -join " ; ") + " - regenerer les quatre captures (memes commandes : -Capture, -Dialogue, -Applications, -Etats), lancer Test-InstallOffice.ps1 -EnregistrerCaptures, puis committer PNG et Maquette\captures.txt" }
     Check "captures : references a jour du XAML (empreinte) et rendu identique" ($ecartsCapture.Count -eq 0) $detailCaptures
+
+    Section "1 ter. Configuration enregistree : secrets et relecture"
+    # Les quatre fonctions sont extraites du moteur telles quelles, comme le worker : c'est
+    # le code qui ecrit config.json sur un poste, pas une reecriture. $CONFIG_FILE est
+    # redirige vers le dossier de travail : rien n'est ecrit dans le profil de l'utilisateur.
+    # Tout se joue dans une portee enfant : les fonctions extraites et les variables d'essai
+    # disparaissent a la sortie du bloc, sans laisser un Get-Config reel en portee de script
+    # (la section 8 quater pose son propre Get-Config factice).
+    & {
+    $CONFIG_FILE = Join-Path $Work "appdata\Office2024Deploy\config.json"
+    foreach ($nomFn in @("Get-Config", "Protect-SecretText", "Unprotect-SecretText", "Save-Config")) {
+        Invoke-Expression (Get-FunctionText -Lines $lines -Name $nomFn)
+    }
+    $motDePasse = "MotDePasse-Essai-2024!"
+    $cleProduit = "NPPR9-FWDCX-D2C8J-H872K-2YT43"
+    $kmsEssai   = "kms.exemple.invalid:1688"
+    # Le dossier n'existe pas encore : Save-Config doit le creer, comme au premier lancement.
+    Save-Config ([pscustomobject]@{
+        KmsServer     = $kmsEssai
+        ProductKeyEnc = (Protect-SecretText $cleProduit)
+        ProxyUser     = "DOM\svc-install"
+        ProxyPassEnc  = (Protect-SecretText $motDePasse)
+    })
+    $brutCfg = if (Test-Path -LiteralPath $CONFIG_FILE) { [System.IO.File]::ReadAllText($CONFIG_FILE) } else { "" }
+    $reluCfg = Get-Config
+    $mdpEnClair = $brutCfg.Contains($motDePasse)
+    $cleEnClair = $brutCfg.Contains($cleProduit)
+    $allerRetour = ($null -ne $reluCfg) -and ([string]$reluCfg.KmsServer -eq $kmsEssai) -and
+                   ((Unprotect-SecretText ([string]$reluCfg.ProductKeyEnc)) -eq $cleProduit) -and
+                   ((Unprotect-SecretText ([string]$reluCfg.ProxyPassEnc)) -eq $motDePasse)
+    Check "config : aller-retour Save-Config/Protect-SecretText, aucun secret en clair" (($brutCfg.Length -gt 0) -and (-not $mdpEnClair) -and (-not $cleEnClair) -and $allerRetour) ("fichier=" + $CONFIG_FILE + " (" + $brutCfg.Length + " octets) mot de passe en clair=" + $mdpEnClair + " cle en clair=" + $cleEnClair + " relecture identique=" + $allerRetour)
+
+    # Fichier tronque (ecriture interrompue, disque plein) : la relecture doit rendre null et
+    # non lever, sinon l'interface ne demarre plus du tout pour un fichier de reglages.
+    [System.IO.File]::WriteAllText($CONFIG_FILE, ('{"KmsServer": "' + $kmsEssai + '", '), (New-Object System.Text.UTF8Encoding($false)))
+    $cfgCorrompu = Get-Config
+    $renduCorrompu = if ($null -eq $cfgCorrompu) { "null" } else { $cfgCorrompu.GetType().Name }
+    Check "config : fichier corrompu -> Get-Config rend null sans lever" ($null -eq $cfgCorrompu) ("fichier=" + $CONFIG_FILE + " tronque, rendu=" + $renduCorrompu + " (attendu null, sinon un fichier de reglages empeche le demarrage)")
+
+    # Blob DPAPI d'un autre compte Windows (ou altere) : indechiffrable sous cette identite.
+    # La relecture doit rendre une chaine vide, sans lever, et le reste du fichier rester lisible.
+    $blobEtranger  = "01000000d08c9ddf0115d1118c7a00c04fc297eb" + ("0" * 192)
+    $blobAleatoire = "0123456789abcdef" * 8
+    $renduEtranger  = Unprotect-SecretText $blobEtranger
+    $renduAleatoire = Unprotect-SecretText $blobAleatoire
+    Save-Config ([pscustomobject]@{ KmsServer = $kmsEssai ; ProductKeyEnc = $blobEtranger })
+    $reluEtranger = Get-Config
+    $okEtranger = ($renduEtranger -eq "") -and ($renduAleatoire -eq "") -and ($null -ne $reluEtranger) -and ([string]$reluEtranger.KmsServer -eq $kmsEssai)
+    Check "config : secret d'une autre identite -> relecture vide, config encore lisible" $okEtranger ("relecture=[" + $renduEtranger + "] blob aleatoire=[" + $renduAleatoire + "] KmsServer relu=[" + $(if ($null -eq $reluEtranger) { "(null)" } else { [string]$reluEtranger.KmsServer }) + "]")
+    }
 
     # fixtures communes
     $fakeExe  = Join-Path $Work "fake_setup.exe"
@@ -1355,11 +1522,15 @@ public class FakeAuthProxy
     $archiveZip = Join-Path $Work "depot.zip"
     $archiveDir = Join-Path $Work "depot"
     $problemesArchive = @()
+    # Racine de l'archive exportee, quand il y en a une : c'est la que l'empreinte des
+    # captures est recalculee. Une copie sans .git n'a pas d'archive a inspecter.
+    $racinePartante = $null
     if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot ".git"))) {
         # Copie extraite d'un ZIP (Code -> Download ZIP) : il n'y a pas de depot a exporter,
-        # donc l'archive n'est pas rejouable ici. Ce qui reste verifiable l'est : le dossier
-        # porte de quoi faire tourner l'EXE, et la section 1 vient de le confirmer sur cette
-        # meme copie. Un clone et la CI, eux, exportent et verifient l'archive.
+        # donc rien a recouper ici — la section 1 bis vient de verifier l'empreinte des
+        # captures sur cette meme copie, la rejouer n'apprendrait rien. Reste la completude
+        # du dossier, que seule cette section regarde. Un clone et la CI, eux, exportent et
+        # verifient l'archive.
         $manquants = @()
         foreach ($attendu in @("Maquette\Principal.xaml", "Install-Office2024-KMS.ps1", "setup.exe")) {
             if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $attendu))) { $manquants += $attendu }
@@ -1378,8 +1549,10 @@ public class FakeAuthProxy
     if (($codeArchive -ne 0) -or -not (Test-Path -LiteralPath $archiveZip)) {
         $problemesArchive += ("git archive HEAD a echoue (code " + $codeArchive + " : " + $sortieArchive + ")")
     } else {
-        try { Expand-Archive -LiteralPath $archiveZip -DestinationPath $archiveDir -Force }
-        catch { $problemesArchive += ("archive illisible : " + $_.Exception.Message) }
+        try {
+            Expand-Archive -LiteralPath $archiveZip -DestinationPath $archiveDir -Force
+            $racinePartante = $archiveDir
+        } catch { $problemesArchive += ("archive illisible : " + $_.Exception.Message) }
         $manquants = @()
         foreach ($attendu in @("Maquette\Principal.xaml", "Install-Office2024-KMS.ps1", "setup.exe")) {
             if (-not (Test-Path -LiteralPath (Join-Path $archiveDir $attendu))) { $manquants += $attendu }
@@ -1409,9 +1582,137 @@ public class FakeAuthProxy
         } else {
             $problemesArchive += "section 1 non rejouee : Test-InstallOffice.ps1 absent de l'archive"
         }
+        # L'archive est ce qui part : son Maquette\captures.txt doit decrire le XAML qu'elle
+        # contient. Un XAML commite sans regenerer les captures laisse une reference perimee
+        # dans le ZIP, que la section 1 bis ne voit pas (elle juge la copie de travail).
+        # La liste des PNG vient de la section 1 bis : une seule copie de cette liste.
+        if ($null -ne $racinePartante) {
+            $sourcesArchive = ""
+            $ficheArchive = Join-Path $racinePartante "Maquette\captures.txt"
+            if (Test-Path -LiteralPath $ficheArchive) {
+                foreach ($l in [System.IO.File]::ReadAllLines($ficheArchive)) {
+                    if ($l -match '^sources\s+([0-9a-fA-F]{64})\s*$') { $sourcesArchive = $matches[1].ToLowerInvariant() }
+                }
+            }
+            $empreinteArchive = ""
+            if (Test-Path -LiteralPath (Join-Path $racinePartante "Apercu-Maquette.ps1") -PathType Leaf) {
+                $empreinteArchive = Get-EmpreinteSources -Racine $racinePartante
+            }
+            $pngAbsents = @($captures | ForEach-Object { $_.Nom } |
+                Where-Object { -not (Test-Path -LiteralPath (Join-Path $racinePartante ("Maquette\" + $_))) })
+            if ($sourcesArchive -eq "") {
+                $problemesArchive += "captures de l'archive : Maquette\captures.txt absent ou sans ligne sources"
+            } elseif ($empreinteArchive -eq "") {
+                $problemesArchive += ("captures de l'archive : empreinte incalculable, Apercu-Maquette.ps1 absent de l'archive (enregistre=" + $sourcesArchive.Substring(0, 12) + ")")
+            } elseif ($sourcesArchive -ne $empreinteArchive) {
+                $problemesArchive += ("captures de l'archive perimees : enregistre=" + $sourcesArchive.Substring(0, 12) + " recalcule=" + $empreinteArchive.Substring(0, 12) + " - regenerer les quatre captures, lancer Test-InstallOffice.ps1 -EnregistrerCaptures, puis committer PNG et Maquette\captures.txt")
+            }
+            if ($pngAbsents.Count -gt 0) { $problemesArchive += ("captures de l'archive : PNG absents=" + ($pngAbsents -join ", ")) }
+        }
     }
     }
-    Check "pre-livraison : l'archive du depot est complete et passe la section 1" ($problemesArchive.Count -eq 0) ($problemesArchive -join " ; ")
+    Check "pre-livraison : l'archive du depot est complete, ses captures sont a jour et elle passe la section 1" ($problemesArchive.Count -eq 0) ($problemesArchive -join " ; ")
+
+
+    Section "12. Livraison : signature, empreinte publiee, ZIP en liste blanche"
+    # setup.exe part tel quel sur les postes : sa signature est la seule preuve que c'est
+    # bien l'Office Deployment Tool de Microsoft et pas un binaire substitue.
+    $sigSetup = $null
+    if (Test-Path -LiteralPath $setupPath) { $sigSetup = Get-AuthenticodeSignature -LiteralPath $setupPath }
+    $sujetSetup = if (($null -ne $sigSetup) -and ($null -ne $sigSetup.SignerCertificate)) { $sigSetup.SignerCertificate.Subject } else { "" }
+    $etatSetup = if ($null -ne $sigSetup) { [string]$sigSetup.Status } else { "(absent)" }
+    Check "setup.exe : signature Authenticode valide emise par Microsoft" (($etatSetup -eq "Valid") -and ($sujetSetup -match 'O=Microsoft Corporation')) ("Status=" + $etatSetup + " sujet=[" + $sujetSetup + "] - un setup.exe non signe ou d'un autre editeur ne doit pas partir")
+
+    # L'empreinte du binaire est publiee dans le README : c'est ce qu'un poste peut
+    # comparer sans git, sans suite de tests et sans rien installer.
+    $hashExeLivre = (Get-FileHash -LiteralPath $ExePath -Algorithm SHA256).Hash.ToUpperInvariant()
+    $texteReadme = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "README.md"))
+    $hashAnnonce = ""
+    if ($texteReadme -match '(?m)^SHA256 Install-Office2024-KMS\.exe\s*=\s*([0-9a-fA-F]{64})\s*$') { $hashAnnonce = $matches[1].ToUpperInvariant() }
+    $detailHash = if ($hashAnnonce -ne "") { $hashAnnonce } else { "(aucune ligne 'SHA256 Install-Office2024-KMS.exe = ...')" }
+    Check "README : empreinte SHA-256 de l'EXE annoncee = fichier livre" (($hashAnnonce -ne "") -and ($hashAnnonce -eq $hashExeLivre)) ("README annonce=" + $detailHash + " / fichier=" + $hashExeLivre + " - mettre le README a jour apres chaque recompilation")
+
+    # Le ZIP se construit ici, dans le dossier de travail, avec la liste blanche de
+    # New-Livraison.ps1 : la suite inspecte exactement ce qui partirait.
+    $zipLivraison = Join-Path $Work "Livraison.zip"
+    $eapLiv = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $sortieLiv = (& $psHost -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "New-Livraison.ps1") -Destination $zipLivraison -Racine $PSScriptRoot 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+    $codeLiv = $LASTEXITCODE
+    $ErrorActionPreference = $eapLiv
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $entrees = @()
+    if (Test-Path -LiteralPath $zipLivraison) {
+        $zipLu = [System.IO.Compression.ZipFile]::OpenRead($zipLivraison)
+        try { $entrees = @($zipLu.Entries | ForEach-Object { $_.FullName }) } finally { $zipLu.Dispose() }
+    }
+    $requisZip = @("Install-Office2024-KMS.exe", "Install-Office2024-KMS.ps1", "setup.exe", "README.md",
+                   "SHA256SUMS", "Verifier-Livraison.ps1",
+                   "Maquette/Principal.xaml", "Maquette/Styles.xaml", "Maquette/Applications.xaml",
+                   "Maquette/Etats.xaml", "Maquette/ReliquatProxy.xaml")
+    $manquantsZip = @($requisZip | Where-Object { $entrees -notcontains $_ })
+    $detailManquants = if ($manquantsZip.Count -gt 0) { $manquantsZip -join ", " } else { "aucun" }
+    Check "Livraison.zip : les elements livres sont dedans (liste blanche)" (($codeLiv -eq 0) -and ($manquantsZip.Count -eq 0)) ("code=" + $codeLiv + " entrees=" + $entrees.Count + " manquants=" + $detailManquants + " ; sortie=[" + ($sortieLiv -replace "\s+", " ") + "]")
+
+    # Ce qui ne doit jamais partir : reglages du poste, journaux, sources Office, suite de
+    # tests. Un config.json dans le ZIP livrerait le serveur KMS et les chemins du poste.
+    $interditsZip = @($entrees | Where-Object {
+        $_ -match '(^|/)config\.json$' -or $_ -match '\.log$' -or
+        $_ -match '(^|/)Office/' -or $_ -match '(^|/)\.git' -or
+        $_ -match 'Test-InstallOffice\.ps1$' -or $_ -match 'Livraison\.zip$' -or
+        $_ -match '(^|/)_[^/]*$' })
+    Check "Livraison.zip : aucun fichier local (config.json, journal, sources Office, suite de tests)" ($interditsZip.Count -eq 0) ("trouves : " + ($interditsZip -join ", ") + " - retirer ces fichiers de la liste blanche de New-Livraison.ps1")
+
+    # SHA256SUMS doit decrire exactement ce que contient le ZIP, empreintes comprises :
+    # c'est ce que le verificateur du poste recompte.
+    $sommesZip = @()
+    $entreesZip = @{}
+    $problemesSommes = @()
+    if ($entrees -contains "SHA256SUMS") {
+        $zipLu = [System.IO.Compression.ZipFile]::OpenRead($zipLivraison)
+        try {
+            $lecteur = New-Object System.IO.StreamReader($zipLu.GetEntry("SHA256SUMS").Open())
+            try { $texteSommes = $lecteur.ReadToEnd() } finally { $lecteur.Dispose() }
+            foreach ($l in ($texteSommes -split "`r?`n")) {
+                if ($l -match '^([0-9a-fA-F]{64})\s+\*?(.+)$') { $sommesZip += @{ Hash = $matches[1].ToUpperInvariant() ; Chemin = $matches[2].Trim() } }
+            }
+            $shaZip = [System.Security.Cryptography.SHA256]::Create()
+            foreach ($e in @($zipLu.Entries | Where-Object { $_.FullName -ne "SHA256SUMS" })) {
+                $flux = $e.Open()
+                try { $h = [System.BitConverter]::ToString($shaZip.ComputeHash($flux)).Replace("-", "").ToUpperInvariant() } finally { $flux.Dispose() }
+                $entreesZip[$e.FullName] = $h
+            }
+        } finally { $zipLu.Dispose() }
+    }
+    foreach ($s in $sommesZip) {
+        if (-not $entreesZip.ContainsKey($s.Chemin)) { $problemesSommes += ($s.Chemin + " : annonce mais absent du ZIP") }
+        elseif ($entreesZip[$s.Chemin] -ne $s.Hash) { $problemesSommes += ($s.Chemin + " : annonce=" + $s.Hash.Substring(0, 12) + " trouve=" + $entreesZip[$s.Chemin].Substring(0, 12)) }
+    }
+    $nomsSommes = @($sommesZip | ForEach-Object { $_.Chemin })
+    foreach ($n in @($entreesZip.Keys | Where-Object { $nomsSommes -notcontains $_ })) { $problemesSommes += ($n + " : present dans le ZIP sans ligne dans SHA256SUMS") }
+    Check "Livraison.zip : SHA256SUMS couvre exactement les fichiers et leurs empreintes" (($sommesZip.Count -gt 0) -and ($problemesSommes.Count -eq 0)) ("lignes=" + $sommesZip.Count + " fichiers=" + $entreesZip.Count + " ; " + ($problemesSommes -join " ; "))
+
+    # Le verificateur est livre dans le ZIP : la suite le rejoue sur l'archive extraite,
+    # comme le ferait un enseignant sur un poste sans git.
+    $dossierLiv = Join-Path $Work "livraison"
+    if (Test-Path -LiteralPath $dossierLiv) { Remove-Item -LiteralPath $dossierLiv -Recurse -Force }
+    if (Test-Path -LiteralPath $zipLivraison) { Expand-Archive -LiteralPath $zipLivraison -DestinationPath $dossierLiv -Force }
+    $sortieVerif = ""
+    $codeVerif = -1
+    $verifPoste = Join-Path $dossierLiv "Verifier-Livraison.ps1"
+    if (Test-Path -LiteralPath $verifPoste) {
+        $eapVerif = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $sortieVerif = (& $psHost -NoProfile -ExecutionPolicy Bypass -File $verifPoste 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+        $codeVerif = $LASTEXITCODE
+        $ErrorActionPreference = $eapVerif
+    }
+    $resumeVerif = @($sortieVerif -split "`r?`n" | Where-Object { $_ -match 'RESULTAT :' })
+    $echecsVerif = @($sortieVerif -split "`r?`n" | Where-Object { $_ -match 'ECHEC' })
+    $ligneVerif = if ($resumeVerif.Count -gt 0) { $resumeVerif[-1].Trim() } else { "(aucune ligne RESULTAT)" }
+    $detailVerif = "code=" + $codeVerif + " ; " + $ligneVerif
+    if ($echecsVerif.Count -gt 0) { $detailVerif += " ; " + (($echecsVerif | ForEach-Object { $_.Trim() }) -join " ; ") }
+    Check "Livraison.zip : le verificateur du poste (sans git) passe sur l'archive extraite" (($codeVerif -eq 0) -and ($ligneVerif -match 'RESULTAT : livraison conforme')) $detailVerif
 }
 catch {
     Write-Host ("ERREUR DU HARNAIS : " + $_.Exception.Message) -ForegroundColor Red
