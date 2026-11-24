@@ -17,7 +17,11 @@ jobs:
   controle:
     name: Test-InstallOffice.ps1
     runs-on: windows-latest
-    timeout-minutes: 15
+    # 40 min : le controle d'interface lance l'EXE et affiche quatre fenetres WPF, ce qui
+    # prend ~3 min sur un runner sans bureau (2 s sur un poste). Il est rejoue par chaque
+    # -Fast (section 1, trois fois dans le controle du hook, une fois sur l'archive), soit
+    # ~15 min a lui seul ; a 15 min le job etait annule avant la section 11.
+    timeout-minutes: 40
     steps:
       - name: Recuperer le depot
         uses: actions/checkout@v4
