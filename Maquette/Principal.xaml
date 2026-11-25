@@ -355,7 +355,7 @@
                   </Grid.ColumnDefinitions>
                   <TextBlock Text="Programme setup.exe" Style="{StaticResource Etiquette}"/>
                   <TextBox x:Name="ChampSetup" Grid.Column="1" Style="{StaticResource Champ}"
-                           Text="C:\InstallOffice2024\setup.exe"/>
+                           Text="setup.exe"/>
                   <Button x:Name="BtnSetup" Grid.Column="2" Style="{StaticResource BoutonSecondaire}"
                           Content="Parcourir…" Padding="10,4" FontSize="12" Margin="8,0,0,0"/>
                 </Grid>
@@ -468,7 +468,8 @@
                 <TextBlock Text="Proxy" FontSize="12" FontWeight="SemiBold"
                            Foreground="{StaticResource AccentFonce}" Margin="0,12,0,0"/>
                 <CheckBox x:Name="ChkProxy" Style="{StaticResource Case}" Margin="0,8,0,0"
-                          Content="Utiliser un proxy pour le téléchargement"/>
+                          Content="Utiliser un proxy pour le téléchargement"
+                          ToolTip="Le proxy ne sert qu'au téléchargement. Avec un dépôt de sources, il est ignoré : rien n'est téléchargé."/>
                 <Grid Margin="0,7,0,0">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="150"/>

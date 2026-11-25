@@ -62,16 +62,24 @@ if (-not $isCompiledExe -and -not $Diagnostic) {
 # ================================================================
 #  CONFIGURATION  (adaptez selon votre environnement)
 # ================================================================
-# setup.exe est d'abord cherche a cote du script (ou de l'EXE compile), puis a l'ancien emplacement.
+# setup.exe est cherche a cote du script (ou de l'EXE compile) : plus de repli vers
+# l'ancien dossier de la racine de C: (relique de la premiere version).
 $DEFAULT_SETUP_PATH = Join-Path -Path $script:ScriptRoot -ChildPath "setup.exe"
-if (-not (Test-Path $DEFAULT_SETUP_PATH)) { $DEFAULT_SETUP_PATH = "C:\InstallOffice2024\setup.exe" }
 $PROXY_BYPASS_DEF   = '<local>;*.local'
 $KMS_SERVEUR        = "KMS.VOTRE-SERVEUR.FR"   # accepte aussi "host:port"
 $KMS_PORT           = "1688"
 $DISK_MIN_GB        = 4
 # Ecart maximal client/hote KMS : au-dela de 4 h, KMS refuse l'horodatage (0xC004F06C).
 $KMS_TOLERANCE_MIN  = 240
-$LOG_FOLDER         = "C:\InstallOffice2024"
+# Dossier machine de l'outil : journaux, marqueur de relais et sources telechargees.
+# ProgramData, jamais un dossier cree a la racine de C:.
+function Get-DossierTravail {
+    $base = $env:ProgramData
+    if ([string]::IsNullOrWhiteSpace($base)) { $base = $env:LOCALAPPDATA }
+    if ([string]::IsNullOrWhiteSpace($base)) { $base = [System.IO.Path]::GetTempPath() }
+    return (Join-Path $base "Office2024Deploy")
+}
+$LOG_FOLDER         = Get-DossierTravail
 # -ConfigFile relit une configuration donnee au lieu de celle du profil : c'est ce qui
 # permet de prouver le mode -Diagnostic sur une configuration de test isolee.
 $CONFIG_FILE        = if (-not [string]::IsNullOrWhiteSpace($ConfigFile)) { $ConfigFile } else { "$env:APPDATA\Office2024Deploy\config.json" }
@@ -2098,7 +2106,9 @@ $depotBrowseBtn.Add_Click({
 $chkUseDepot.Add_CheckedChanged({
     $depotPathBox.Enabled   = $chkUseDepot.Checked
     $depotBrowseBtn.Enabled = $chkUseDepot.Checked
-    $chkUseProxy.Enabled    = -not $chkUseDepot.Checked
+    # La case proxy reste cliquable : un depot n'a pas besoin d'Internet, mais la
+    # desactiver faisait croire a une panne de l'interface et empechait de preparer
+    # le reglage pour un prochain telechargement.
     if ($chkUseDepot.Checked -and -not $chkActivate.Checked -and -not $chkInstall.Checked) { $chkActivate.Checked = $true }
     Update-ProxyControlState
 })
@@ -2319,7 +2329,6 @@ function Update-ProxyControlState {
     $proxyAuthPassLabel.Enabled = $enabled
     $proxyAuthPassBox.Enabled = $enabled
     $proxyTestBtn.Enabled = $enabled
-    if ($null -ne $chkUseDepot) { $chkUseProxy.Enabled = -not $chkUseDepot.Checked }
 }
 
 # Test du proxy : verifie le proxy ET la destination Microsoft (CONNECT HTTP)
@@ -2890,6 +2899,26 @@ $script:BgDoWorkHandler = {
         return $k
     }
 
+    # --- Racine d'un depot de sources ------------------------------------------
+    #  ODT attend <racine>\Office\Data. Le dossier choisi peut etre cette racine, le
+    #  dossier Office ou le dossier Data : on remonte jusqu'a trois niveaux et on rend
+    #  la premiere racine qui contient Office\Data ; $null si aucune ne convient.
+    function bg_ResolveDepotRoot {
+        param([string]$Path)
+        if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+        $p = $Path.Trim().Trim('"')
+        if ($p.Length -gt 3) { $p = $p.TrimEnd('\') }
+        for ($i = 0; $i -lt 3; $i++) {
+            if ([string]::IsNullOrWhiteSpace($p)) { break }
+            $data = Join-Path $p "Office\Data"
+            if (Test-Path -LiteralPath $data -PathType Container) {
+                return @{ Root = $p ; Office = (Join-Path $p "Office") }
+            }
+            $p = Split-Path $p -Parent
+        }
+        return $null
+    }
+
     # --- Le depot est-il sur un disque local fixe (pas de copie necessaire) ? ---
     function bg_TestDepotLocal {
         param([string]$Path)
@@ -3112,6 +3141,9 @@ $script:BgDoWorkHandler = {
     }
 
     $ao = $cfg.ActivateOnly
+    # Resolu une fois : l'etape 2 ecrit le XML avec cette racine, l'etape 3 copie et
+    # valide la meme source. $null laisse l'etape 3 produire le message d'erreur.
+    $depotResolu = if ($cfg.DepotEnabled) { bg_ResolveDepotRoot ([string]$cfg.DepotPath) } else { $null }
 
     try {
     bg_Log "Worker demarre (ActivateOnly=$ao, RemoveOld=$($cfg.RemoveOld), DoInstall=$($cfg.DoInstall), DoActivate=$($cfg.DoActivate))" "INFO"
@@ -3237,8 +3269,11 @@ $script:BgDoWorkHandler = {
                 $cfg.SourcePath = $cfg.LocalDataPath
                 $cfg.DepotCopy  = $false
                 if ($cfg.DepotEnabled) {
-                    $cfg.DepotCopy = -not (bg_TestDepotLocal ([string]$cfg.DepotPath))
-                    if (-not $cfg.DepotCopy) { $cfg.SourcePath = [string]$cfg.DepotPath }
+                    # Un depot choisi au niveau du dossier Office ou Data produit des
+                    # maintenant la racine attendue par le XML.
+                    $racineXml = if ($null -ne $depotResolu) { [string]$depotResolu.Root } else { [string]$cfg.DepotPath }
+                    $cfg.DepotCopy = -not (bg_TestDepotLocal $racineXml)
+                    if (-not $cfg.DepotCopy) { $cfg.SourcePath = $racineXml }
                     bg_Log "Mode depot : sources = $($cfg.SourcePath) (copie locale = $($cfg.DepotCopy))" "INFO"
                 }
 
@@ -3289,19 +3324,24 @@ $script:BgDoWorkHandler = {
             try {
                 $depot = [string]$cfg.DepotPath
                 bg_Log "Mode depot : $depot (aucun telechargement)" "INFO"
-                if (-not (Test-Path $depot)) { throw "Depot de sources introuvable : $depot" }
+                if ($null -eq $depotResolu) {
+                    throw ("Depot de sources invalide : " + $depot + ". Cherche : <racine>\Office\Data. Choisissez la racine du depot (elle contient Office\Data), le dossier Office, ou le dossier Data.")
+                }
 
-                $cfg.DepotCopy  = -not (bg_TestDepotLocal $depot)
-                $cfg.SourcePath = if ($cfg.DepotCopy) { [string]$cfg.LocalDataPath } else { $depot }
+                $cfg.DepotCopy  = -not (bg_TestDepotLocal ([string]$depotResolu.Root))
+                $cfg.SourcePath = if ($cfg.DepotCopy) { [string]$cfg.LocalDataPath } else { [string]$depotResolu.Root }
                 if ($cfg.UseCustomXML) {
                     bg_Log "XML personnalise : SourcePath sera impose/verifie avant l'installation ($($cfg.SourcePath))." "INFO"
                 }
 
                 if ($cfg.DepotCopy) {
-                    $dest = [string]$cfg.LocalDataPath
-                    bg_Log "Copie du depot vers $dest (le service Click-to-Run n'accede pas aux partages sous LocalSystem)..." "INFO"
+                    # Seul le dossier Office est copie, sans /PURGE : le XML genere a
+                    # l'etape 2 vit dans le meme dossier de travail et serait supprime
+                    # par un miroir, avant meme l'installation.
+                    $dest = Join-Path ([string]$cfg.LocalDataPath) "Office"
+                    bg_Log "Copie du dossier Office du depot vers $dest (le service Click-to-Run n'accede pas aux partages sous LocalSystem)..." "INFO"
                     if (-not (Test-Path $dest)) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
-                    $rcArgs = @("`"$depot`"", "`"$dest`"", "/MIR", "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/R:2", "/W:2")
+                    $rcArgs = @("`"$($depotResolu.Office)`"", "`"$dest`"", "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/R:2", "/W:2")
                     $rc = Start-Process -FilePath "robocopy.exe" -ArgumentList $rcArgs -Wait -PassThru -WindowStyle Hidden
                     if ($rc.ExitCode -ge 8) { throw "Copie impossible depuis le depot (robocopy code $($rc.ExitCode)). Verifiez les droits sur $depot." }
                     bg_Log "Copie du depot terminee." "OK"
@@ -3317,8 +3357,8 @@ $script:BgDoWorkHandler = {
                 bg_Step 2 "done"
             } catch {
                 bg_Step 2 "error" ; bg_Log "Echec depot : $($_.Exception.Message)" "ERROR"
-                bg_Log "Solution : corriger le chemin du depot, ou decocher 'Depot de sources' pour telecharger." "WARN"
-                bg_Popup "Depot de sources" "$($_.Exception.Message)`n`nSolution : le depot doit contenir le dossier 'Office\Data'." "Error"
+                bg_Log "Solution : corriger le chemin du depot (racine contenant Office\Data, dossier Office, ou dossier Data), ou decocher 'Depot de sources' pour telecharger." "WARN"
+                bg_Popup "Depot de sources" "$($_.Exception.Message)`n`nSolution : choisir la racine du depot (elle contient Office\Data), le dossier Office, ou le dossier Data." "Error"
                 bg_Abort "Deploiement interrompu." ; return
             }
         } else {
@@ -3503,7 +3543,7 @@ $script:BgDoWorkHandler = {
                 # Message contextuel selon le code de sortie
                 $ec = if ($_.Exception.Message -match 'code de sortie\s*:\s*(\d+)') { [int]$matches[1] } else { -1 }
                 $sol = switch ($ec) {
-                    32    { "Code 32 = fichier verrouille. Causes : antivirus qui scanne le dossier C:\InstallOffice2024, service Click-to-Run actif, ou droits insuffisants. Essayez : 1) Desactiver Defender temps reel brievement  2) Relancer en Administrateur  3) Redemarrer le poste" }
+                    32    { "Code 32 = fichier verrouille. Causes : antivirus qui scanne le dossier des sources, service Click-to-Run actif, ou droits insuffisants. Essayez : 1) Desactiver Defender temps reel brievement  2) Relancer en Administrateur  3) Redemarrer le poste" }
                     17002 { "Code 17002 = installation incomplete. Redemarrez le poste et reessayez." }
                     30066 { "Code 30066 = fichiers introuvables. Verifiez le chemin setup.exe." }
                     default {
@@ -3556,16 +3596,18 @@ $script:BgDoWorkHandler = {
             if ($installCode -ne 0) { throw "setup.exe code de sortie : $installCode" }
             bg_Log "Office 2024 installe avec succes dans Program Files." "OK" ; bg_Step 3 "done"
             # Nettoyage des fichiers sources temporaires (ne pas garder ~3 Go inutiles)
-            $officeDataDir = Join-Path $cfg.LocalDataPath "Office"
             if ($cfg.DepotEnabled -and -not $cfg.DepotCopy) {
-                bg_Log "Nettoyage ignore : les sources sont le depot lui-meme ($officeDataDir)." "INFO"
-            } elseif (Test-Path $officeDataDir) {
-                bg_Log "Nettoyage des fichiers sources : $officeDataDir" "INFO"
-                try {
-                    Remove-Item $officeDataDir -Recurse -Force -ErrorAction Stop
-                    bg_Log "Fichiers sources supprimes (espace libere)." "OK"
-                } catch {
-                    bg_Log "Nettoyage non bloquant : $($_.Exception.Message)" "WARN"
+                bg_Log "Nettoyage ignore : les sources sont le depot lui-meme ($($cfg.SourcePath))." "INFO"
+            } else {
+                $officeDataDir = Join-Path $cfg.LocalDataPath "Office"
+                if (Test-Path $officeDataDir) {
+                    bg_Log "Nettoyage des fichiers sources : $officeDataDir" "INFO"
+                    try {
+                        Remove-Item $officeDataDir -Recurse -Force -ErrorAction Stop
+                        bg_Log "Fichiers sources supprimes (espace libere)." "OK"
+                    } catch {
+                        bg_Log "Nettoyage non bloquant : $($_.Exception.Message)" "WARN"
+                    }
                 }
             }
         } catch {
@@ -3573,7 +3615,7 @@ $script:BgDoWorkHandler = {
             $ec4 = if ($_.Exception.Message -match 'code de sortie\s*:\s*(-?\d+)') { [int]$matches[1] } else { -999 }
             $sol4 = switch ($ec4) {
                 -999   { "setup.exe n'a pas pu demarrer : le fichier est peut-etre bloque (clic droit > Proprietes > Debloquer) ou mis en quarantaine par l'antivirus. Verifiez le chemin setup.exe puis relancez." }
-                32     { "Fichier verrouille pendant l'installation : fermez Word/Excel/Outlook, empechez l'antivirus de scanner le dossier des sources (C:\InstallOffice2024), ou redemarrez le poste, puis relancez." }
+                32     { "Fichier verrouille pendant l'installation : fermez Word/Excel/Outlook, empechez l'antivirus de scanner le dossier des sources, ou redemarrez le poste, puis relancez." }
                 30066  { "Une autre installation est en cours (Windows Installer ou Click-to-Run occupe). Fermez les applications Office, attendez la fin des processus 'OfficeClickToRun' / 'setup' (redemarrez si besoin), puis relancez." }
                 17029  { "Une version d'Office est deja installee : cochez 'Desinstaller l'ancienne version d'Office' puis relancez le deploiement." }
                 17002  { "Installation inachevee, souvent une coexistence avec une installation precedente : redemarrez le poste, verifiez qu'aucune application Office ne tourne, puis relancez." }
@@ -3857,7 +3899,7 @@ function Start-Deployment {
     # Choisir le dossier de telechargement ODT selon les droits
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")
     if ($isAdmin) {
-        $script:ResolvedDataPath = $LOG_FOLDER   # C:\InstallOffice2024
+        $script:ResolvedDataPath = $LOG_FOLDER
     } else {
         $script:ResolvedDataPath = Join-Path $env:LOCALAPPDATA "Office2024Deploy"
     }

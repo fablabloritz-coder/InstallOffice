@@ -333,6 +333,35 @@ try {
     $enregistrePass = [regex]::Matches($blocConfigPoste, 'ProxyPass\w*\s*=').Count
     Check "proxy authentifie : mot de passe jamais enregistre" ($enregistreUser -and ($enregistrePass -eq 0)) ("ProxyUser enregistre=" + $enregistreUser + " affectations de mot de passe=" + $enregistrePass)
 
+    # Le dossier de travail n'est plus a la racine de C: : journaux, marqueur de relais et
+    # sources vivent sous ProgramData. L'interface et le moteur ne doivent plus nommer
+    # l'ancien dossier, sinon un poste deja configure y retourne.
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "Get-DossierTravail")
+    $dossierTravail = Get-DossierTravail
+    $attenduTravail = Join-Path $env:ProgramData "Office2024Deploy"
+    Check "dossier de travail : %ProgramData%\Office2024Deploy cote machine" ($dossierTravail -eq $attenduTravail) ("rendu=" + $dossierTravail + " attendu=" + $attenduTravail)
+    $legacyMoteur = [regex]::Matches($moteur, 'C:\\InstallOffice2024').Count
+    $legacyInterface = [regex]::Matches($src, 'C:\\InstallOffice2024').Count
+    Check "chemins : plus aucun C:\InstallOffice2024 dans le moteur ni l'interface" (($legacyMoteur -eq 0) -and ($legacyInterface -eq 0)) ("moteur=" + $legacyMoteur + " interface=" + $legacyInterface + " - retirer le repli vers l'ancien dossier")
+
+    # La case proxy etait desactivee des qu'un depot etait coche : elle devenait
+    # incliquable, ce qui ressemblait a une panne. Le proxy ne sert qu'au telechargement,
+    # mais son reglage doit rester accessible.
+    $proxyCliquable = ($src -notmatch 'FindName\("ChkProxy"\)\.IsEnabled') -and ($moteur -notmatch '\$chkUseProxy\.Enabled')
+    Check "proxy : la case reste cliquable quand un depot est choisi" $proxyCliquable "desactivation du controle proxy encore presente (interface ou moteur)"
+
+    # Le champ setup affiche "setup.exe" : un chemin relatif se lit a cote de l'EXE, pas
+    # dans le dossier courant du processus, qui depend de l'appelant (GPO, raccourci...).
+    $lignesInterface = @($src -split "`r?`n")
+    $ici = $PSScriptRoot
+    Invoke-Expression (Get-FunctionText -Lines $lignesInterface -Name "Resolve-SetupPath")
+    $setupRelatif = Resolve-SetupPath "setup.exe"
+    $setupAbsolu  = Resolve-SetupPath "D:\outils\setup.exe"
+    $setupVide    = Resolve-SetupPath ""
+    $setupLegacy  = Resolve-SetupPath "C:\InstallOffice2024\setup.exe"
+    $attenduSetup = Join-Path $PSScriptRoot "setup.exe"
+    Check "setup : relatif et ancien emplacement resolus a cote de l'EXE, absolu conserve" (($setupRelatif -eq $attenduSetup) -and ($setupVide -eq $attenduSetup) -and ($setupLegacy -eq $attenduSetup) -and ($setupAbsolu -eq "D:\outils\setup.exe")) ("relatif=" + $setupRelatif + " vide=" + $setupVide + " legacy=" + $setupLegacy + " absolu=" + $setupAbsolu)
+
     # Contrat des noms : tout nom que le script demande a la fenetre (FindName) doit exister
     # dans l'un des cinq XAML. Un nom disparu ne se voit ni a la compilation ni au chargement
     # du XAML : la ligne d'interface reste muette, ou le script jette au moment de l'afficher.
@@ -897,6 +926,38 @@ try {
     Check "XML genere : /configure recoit le XML genere" ($r.Args -match '/configure .*OfficeConfig2024\.xml') $r.Args
     Check "XML genere : installation OK" ($r.Sync.StepState[3] -eq "done") ($r.Sync.StepState -join " ")
 
+    # Le dossier choisi dans l'interface peut etre la racine du depot, le dossier Office
+    # ou le dossier Data : ODT attend toujours <racine>\Office\Data. Un depot correct
+    # choisi un niveau trop bas etait declare introuvable.
+    Invoke-Expression (Get-FunctionText -Lines $lines -Name "bg_ResolveDepotRoot")
+    $dossierOffice = Join-Path $depot "Office"
+    $dossierData   = Join-Path $depot "Office\Data"
+    $rRacine = bg_ResolveDepotRoot $depot
+    $rOffice = bg_ResolveDepotRoot $dossierOffice
+    $rData   = bg_ResolveDepotRoot $dossierData
+    $rVide   = bg_ResolveDepotRoot $depotVide
+    $vue = { param($r) if ($null -eq $r) { "(nul)" } else { $r.Root } }
+    $okResolu = ($null -ne $rRacine) -and ($null -ne $rOffice) -and ($null -ne $rData) -and ($null -eq $rVide) -and
+                ($rRacine.Root -eq $depot) -and ($rOffice.Root -eq $depot) -and ($rData.Root -eq $depot)
+    Check "depot : racine, dossier Office et dossier Data menent tous a Office\Data" $okResolu ("racine=" + (& $vue $rRacine) + " office=" + (& $vue $rOffice) + " data=" + (& $vue $rData) + " vide=" + (& $vue $rVide))
+
+    $local = Join-Path $Work "in_dossier_office"
+    $r = Invoke-Deploy $Worker (New-Cfg (New-SyncHash) $fakeExe $local -Depot $dossierOffice -Install $true) $argsFile
+    Check "depot choisi au niveau du dossier Office : installation OK" (($r.Sync.StepState[2] -eq "done") -and ($r.Sync.StepState[3] -eq "done")) ($r.Sync.StepState -join " ")
+
+    # Partage UNC : le worker copie le dossier Office en local. La variante force la
+    # branche "copie" sur un depot local (bg_TestDepotLocal rend false). Le XML genere a
+    # l'etape 2 doit survivre a la copie : /MIR le supprimait avant l'installation.
+    $WorkerCopie = [scriptblock]::Create($body.Replace('return ($di.DriveType -eq [System.IO.DriveType]::Fixed)', 'return $false'))
+    $local = Join-Path $Work "in_copie"
+    $r = Invoke-Deploy $WorkerCopie (New-Cfg (New-SyncHash) $fakeExe $local -Depot $depot -Install $true) $argsFile
+    $xmlSurvit = Test-Path (Join-Path $local "OfficeConfig2024.xml")
+    $journalCopie = @($r.Logs) -join " "
+    # Les sources copiees sont nettoyees apres une installation reussie : le journal est
+    # la preuve que la branche de copie a bien ete jouee et validee.
+    $copieOk = ($journalCopie -match 'Copie du dossier Office du depot') -and ($journalCopie -match 'Sources validees : .*\\Office\\Data')
+    Check "depot copie (partage) : le XML survit et l'installation le retrouve" ($copieOk -and $xmlSurvit -and ($r.Sync.StepState[2] -eq "done") -and ($r.Sync.StepState[3] -eq "done")) ("copie=" + $copieOk + " xml=" + $xmlSurvit + " etats=" + ($r.Sync.StepState -join " "))
+
     Section "4. Destination et espace disque"
     $fnSpace = Get-FunctionText -Lines $lines -Name "bg_SpaceVerdict"
     Invoke-Expression $fnSpace
@@ -956,7 +1017,8 @@ try {
     Section "7. Garde-fous generaux"
     $local = Join-Path $Work "depot_ko"
     $r = Invoke-Deploy $Worker (New-Cfg (New-SyncHash) $fakeExe $local -Depot $depotVide) $argsFile
-    Check "depot sans Office\Data : erreur + arret" (($r.Sync.StepState[2] -eq "error") -and ($r.Sync.FinalMsg -like "*interrompu*")) $r.Sync.FinalMsg
+    $msgDepotKo = ([string]$r.Sync.PopupMsg + " " + [string]$r.Sync.FinalMsg).Trim()
+    Check "depot sans Office\Data : erreur, chemin et attente nommes, arret" (($r.Sync.StepState[2] -eq "error") -and ($r.Sync.FinalMsg -like "*interrompu*") -and ($msgDepotKo -match [regex]::Escape($depotVide)) -and ($msgDepotKo -match 'Office\\Data')) $msgDepotKo
 
     $local = Join-Path $Work "proxy_ko"
     $r = Invoke-Deploy $Worker (New-Cfg (New-SyncHash) $fakeExe $local -Proxy $true) $argsFile

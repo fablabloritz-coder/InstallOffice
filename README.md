@@ -28,7 +28,7 @@ Le dossier extrait contient tout : le programme, ses fenêtres (`Maquette\`), le
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `Install-Office2024-KMS.ps1` | Moteur : déroulé de déploiement extrait par l'EXE ; son interface WinForms historique reste exécutable telle quelle |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (170 cas, `-Fast` pour la section 1 seule) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (177 cas, `-Fast` pour la section 1 seule) |
 | `version.txt` | Version de l'outil, source unique : le badge, le README, le script et `Compare-ExeRecompilation.ps1` s'y comparent |
 | `Set-Version.ps1` | Vérifie ou écrit cette version partout, et refuse si un emplacement diverge |
 | `New-Livraison.ps1` | Construit `Livraison.zip` en liste blanche, avec `SHA256SUMS` |
@@ -72,9 +72,12 @@ installe en silencieux, puis active par KMS.
 **2. Dépôt de sources** (recommandé sur le réseau pédagogique)
 Télécharger les sources **une fois** dans un dossier (local ou partagé), puis cocher
 « Dépôt de sources » sur chaque poste : aucune connexion Internet n'est alors nécessaire,
-l'installation et l'activation KMS se font en une seule passe. Si le dépôt est un partage
-UNC, les sources sont recopiées localement (`robocopy`), car le service Click-to-Run ne
-lit pas les partages sous le compte `LocalSystem`.
+l'installation et l'activation KMS se font en une seule passe. Le dossier choisi peut être
+la racine du dépôt (elle contient `Office\Data`), le dossier `Office` ou le dossier `Data` :
+l'outil retrouve `Office\Data` dans les trois cas. Si le dépôt est un partage UNC, les
+sources sont recopiées localement (`robocopy`) dans
+`%ProgramData%\Office2024Deploy\Office`, sans toucher au XML généré, car le service
+Click-to-Run ne lit pas les partages sous le compte `LocalSystem`.
 
 ## Diagnostic sans installation
 
@@ -368,7 +371,7 @@ conforme.
 Empreinte du binaire livré, publiée ici pour être comparée sans git :
 
 ```
-SHA256 Install-Office2024-KMS.exe = F3366F64DCB4E16353EDD6D44615D0E3127872DC6A361513ABB0778D8946473E
+SHA256 Install-Office2024-KMS.exe = FE653BA0BA075C9F285BB88120D3811FA9536C5E2CF167AE37FAD4780698862B
 ```
 
 La suite compare cette ligne au fichier livré : une recompilation sans mise à jour du
@@ -405,7 +408,9 @@ poser le vrai tag.
 
 ## Journaux et configuration
 
-- Journal : `C:\InstallOffice2024\deploy_AAAAMMJJ_HHMMSS.log` (bouton « Exporter » dans l'interface)
+- Journal, rapport silencieux, marqueur de relais, XML et sources ODT :
+  `%ProgramData%\Office2024Deploy\` (bouton « Exporter » dans l'interface) — plus aucun
+  dossier créé à la racine de `C:`
 - Configuration du poste : `%APPDATA%\Office2024Deploy\config.json`
   (mots de passe et clé produit chiffrés en DPAPI, donc liés au compte utilisateur)
 
@@ -420,7 +425,7 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps
 embarqué, propriétés de l'EXE, présence des fichiers livrés avec lui et interface ouverte
 hors écran avec chaque nom résolu — soit quelques secondes : c'est exactement ce que lance
 le hook avant chaque commit. Sans commutateur, la
-suite complète (170 cas) tourne, comme sur GitHub.
+suite complète (177 cas) tourne, comme sur GitHub.
 
 Le **dernier contrôle** de la suite relit ce README, y cherche toutes les mentions
 « N cas » et exige qu'elles valent le total réellement exécuté : un cas ajouté ou retiré
@@ -544,7 +549,7 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   ralenti ; `git commit --no-verify` reste possible pour un cas exceptionnel, et se voit
   dans l'historique.
 - **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la suite
-  **complète** (170 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
+  **complète** (177 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
   request : un EXE oublié ou compilé autrement fait échouer la vérification côté serveur,
   même si le hook local n'était pas installé — et sans rien imposer à la boucle locale.
 - **et la recompilation y est vérifiée aussi** : un job à part installe `ps2exe`,

@@ -183,8 +183,15 @@ $etatsEtapes = @{ waiting = "attente" ; running = "encours" ; done = "termine" ;
 # qu'apres une connexion TCP reussie.
 function Resolve-SetupPath {
     param([string]$Saisi)
-    if (-not [string]::IsNullOrWhiteSpace($Saisi)) { return $Saisi.Trim() }
-    return (Join-Path $ici "setup.exe")
+    if ([string]::IsNullOrWhiteSpace($Saisi)) { return (Join-Path $ici "setup.exe") }
+    $chemin = $Saisi.Trim()
+    # Le setup de l'ancienne version vivait dans un dossier de la racine de C: : ce
+    # chemin ne doit plus etre utilise, meme si le fichier y existe encore.
+    if ($chemin -match '(?i)^[a-z]:\\InstallOffice2024\\setup\.exe$') { return (Join-Path $ici "setup.exe") }
+    # Un chemin relatif ("setup.exe", valeur par defaut de l'ecran) se lit a cote de
+    # l'EXE : le dossier courant du processus n'est pas celui de l'outil.
+    if ([System.IO.Path]::IsPathRooted($chemin)) { return $chemin }
+    return (Join-Path $ici $chemin)
 }
 
 function Split-HotePort {
@@ -442,7 +449,7 @@ function Import-ConfigPoste {
     param($Fenetre)
     $s = Get-Config
     if ($null -eq $s) { return }
-    if ($s.SetupExePath) { $Fenetre.FindName("ChampSetup").Text = [string]$s.SetupExePath }
+    if ($s.SetupExePath) { $Fenetre.FindName("ChampSetup").Text = Resolve-SetupPath ([string]$s.SetupExePath) }
     if ($s.KmsServer) { $Fenetre.FindName("ChampKms").Text = [string]$s.KmsServer }
     if ($s.Language) { $Fenetre.FindName("LangueTexte").Text = [string]$s.Language }
     if ($null -ne $s.RemoveOld) { $Fenetre.FindName("ChkRemoveOld").IsChecked = [bool]$s.RemoveOld }
@@ -569,18 +576,6 @@ function Get-ScriptblockMoteur {
     # ScriptBlockExpressionAst porte toujours ses deux accolades.
     $t = $bloc.Extent.Text.Trim()
     return $t.Substring(1, $t.Length - 2)
-}
-
-function Get-ConstanteMoteur {
-    # Constante du moteur lue dans sa source (LOG_FOLDER...), pour ne pas la recopier.
-    # Le fichier est deja valide par Get-ScriptblockMoteur : une constante absente est
-    # une source qui a change de forme, et elle s'arrete ici en la nommant plutot que
-    # de laisser l'apercu travailler sur un chemin invente.
-    param([string]$Chemin, [string]$Nom)
-    foreach ($l in [System.IO.File]::ReadAllLines($Chemin)) {
-        if ($l -match ('^\$' + $Nom + '\s*=\s*"([^"]+)"')) { return $Matches[1] }
-    }
-    throw ("Moteur : constante $" + $Nom + " introuvable dans " + $Chemin + ".")
 }
 
 function New-CfgDeploiement {
@@ -811,8 +806,7 @@ function Read-ConfigDeploiement {
     }
 
     $dossier = $LOG_FOLDER
-    $setup = [string](Get-ProprieteConfig $j "SetupExePath")
-    if ([string]::IsNullOrWhiteSpace($setup)) { $setup = Join-Path $ici "setup.exe" }
+    $setup = Resolve-SetupPath ([string](Get-ProprieteConfig $j "SetupExePath"))
     $langue = [string](Get-ProprieteConfig $j "Language")
     if ([string]::IsNullOrWhiteSpace($langue)) { $langue = "fr-fr" }
     $exclues = @(Get-ProprieteConfig $j "ExcludedApps")
@@ -1349,8 +1343,14 @@ function Update-Options {
     param($Fenetre)
     $mode = Get-SourceMode $Fenetre
     Set-Actif $Fenetre @("ChampDepot", "BtnDepot") $mode.Depot
-    $Fenetre.FindName("ChkProxy").IsEnabled = -not $mode.Depot
-    Set-Actif $Fenetre @("ChampProxy", "ChampPort", "ChampProxyUser", "ChampProxyPass", "ChampBypass", "BtnTestProxy") $mode.Proxy
+    # La case proxy reste toujours cliquable : avec un depot elle est simplement ignoree
+    # (aucun telechargement), ce que dit son infobulle. La desactiver faisait passer une
+    # regle pour une panne et empechait de preparer le reglage d'un prochain telechargement.
+    # Les champs suivent la case, pas la regle du depot : une case cochee avec des champs
+    # gris serait tout aussi incomprehensible. La configuration envoyee, elle, n'applique
+    # le proxy que hors mode depot (Get-SourceMode).
+    $proxySaisi = [bool]$Fenetre.FindName("ChkProxy").IsChecked
+    Set-Actif $Fenetre @("ChampProxy", "ChampPort", "ChampProxyUser", "ChampProxyPass", "ChampBypass", "BtnTestProxy") $proxySaisi
     $kms = [bool]$Fenetre.FindName("ChkKms").IsChecked
     Set-Actif $Fenetre @("ChampKms", "ChampKmsSecours", "BtnTestKms") $kms
     Set-Actif $Fenetre @("ChampCle") ([bool]$Fenetre.FindName("ChkCle").IsChecked)
@@ -1372,12 +1372,12 @@ $scenario = @(
              "info|Test TCP du KMS kms.ac-nancy.fr:1688 : joignable en 42 ms.") }
     @{ P = @{ 2 = "termine" ; 3 = "encours" } ; J = 28 ; S = "Copie des sources depuis le depot" ; D = "Etape 3 sur 5" ;
        C = @("ok|dossier cree", "encours|copie", "attente|6,8 Go verifies") ;
-       L = @("ok|Configuration ODT generee (ProPlus2024Volume, PerpetualVL2024).", "etape|Etape 3/5 - Sources", "info|robocopy \\serveur\office -> C:\Office2024\sources") }
+       L = @("ok|Configuration ODT generee (ProPlus2024Volume, PerpetualVL2024).", "etape|Etape 3/5 - Sources", "info|robocopy \\serveur\office -> %ProgramData%\Office2024Deploy\Office") }
     @{ J = 46 ; S = "Copie des sources depuis le depot" ; D = "Etape 3 sur 5" ;
        L = @("info|4,1 Go copies sur 6,8 Go (60 %).") }
     @{ P = @{ 3 = "termine" ; 4 = "encours" } ; J = 66 ; S = "Installation Click-to-Run en cours" ; D = "Etape 4 sur 5" ;
        C = @("ok|Click-to-Run", "encours|applications", "attente|configuration") ;
-       L = @("ok|Sources pretes : 6,8 Go dans C:\Office2024\sources.", "etape|Etape 4/5 - Installation", "info|setup.exe /configure OfficeConfig2024.xml (silencieux).") }
+       L = @("ok|Sources pretes : 6,8 Go dans %ProgramData%\Office2024Deploy\Office.", "etape|Etape 4/5 - Installation", "info|setup.exe /configure OfficeConfig2024.xml (silencieux).") }
     @{ J = 82 ; S = "Installation Click-to-Run en cours" ; D = "Etape 4 sur 5" ;
        L = @("info|Click-to-Run : installation des applications Office...") }
     @{ P = @{ 4 = "termine" ; 5 = "encours" } ; J = 94 ; S = "Activation KMS" ; D = "Etape 5 sur 5" ;
@@ -1810,7 +1810,6 @@ if ($VerifierInterface -ne "") {
 # Le relais, le marqueur, le reliquat, le chiffrement et la configuration sont le code
 # du moteur : extraits par analyse syntaxique, ils sont evalues ici, jamais recopies.
 # L'ecran et le mode silencieux s'en servent tous les deux.
-$LOG_FOLDER = Get-ConstanteMoteur $CheminMoteur "LOG_FOLDER"
 # %APPDATA% manque dans certains contextes de service : un chemin vide ferait lever
 # Join-Path au demarrage, comme le chemin de script.
 $profilConfig = if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) { $env:APPDATA } else { [System.IO.Path]::GetTempPath() }
@@ -1821,8 +1820,12 @@ $CONFIG_FILE = Join-Path $profilConfig "Office2024Deploy\config.json"
     "Get-ProxyRelaySink", "Get-WinHttpProxyAddress", "Get-InetProxyAddress",
     "Test-ProxyRelayResidue", "Reset-ProxyRelayResidue",
     "Start-ProxyRelay", "Start-ProxyRelayWindows", "Stop-ProxyRelay", "Start-AuthenticatedProxy",
-    "Protect-SecretText", "Unprotect-SecretText", "Get-Config", "Save-Config"
+    "Protect-SecretText", "Unprotect-SecretText", "Get-Config", "Save-Config",
+    "Get-DossierTravail"
 ))))
+# Dossier machine (journaux, sources) : la fonction du moteur fait foi, il n'est plus
+# besoin de relire une constante dans sa source.
+$LOG_FOLDER = Get-DossierTravail
 
 # --- Mode capture : rendu hors ecran, aucun affichage ----------------------
 if ($Capture -ne "") {
