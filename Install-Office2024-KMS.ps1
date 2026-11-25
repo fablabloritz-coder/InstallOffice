@@ -32,7 +32,7 @@
 # ================================================================
 
 # Mode lecture seule : verifie le poste et rend un rapport, sans rien installer.
-param([switch]$Diagnostic)
+param([switch]$Diagnostic, [string]$ConfigFile = "")
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -70,7 +70,9 @@ $KMS_SERVEUR        = "KMS.VOTRE-SERVEUR.FR"   # accepte aussi "host:port"
 $KMS_PORT           = "1688"
 $DISK_MIN_GB        = 4
 $LOG_FOLDER         = "C:\InstallOffice2024"
-$CONFIG_FILE        = "$env:APPDATA\Office2024Deploy\config.json"
+# -ConfigFile relit une configuration donnee au lieu de celle du profil : c'est ce qui
+# permet de prouver le mode -Diagnostic sur une configuration de test isolee.
+$CONFIG_FILE        = if (-not [string]::IsNullOrWhiteSpace($ConfigFile)) { $ConfigFile } else { "$env:APPDATA\Office2024Deploy\config.json" }
 $VERSION            = "v8.2"
 $STEP_ESTIMATES     = @{ 0=3; 1=1; 2=18; 3=12; 4=1 }
 
@@ -1119,7 +1121,7 @@ function Get-Diagnostic {
         } else {
             $c = Test-ProxyConnect -ProxyHost $hoteProxy -ProxyPort $portProxy -TargetHost "officecdn.microsoft.com" -TargetPort 443 -TimeoutMs 4000
             if ($c.OK) { $etat = "OK" ; $detail = ("proxy " + $hoteProxy + ":" + $portProxy + " joignable ; CONNECT officecdn.microsoft.com:443 accepte") }
-            elseif ($c.Code -eq 407) { $etat = "ATTENTION" ; $detail = ("proxy joignable ; 407 (authentification : " + $c.Schemes + ")") }
+            elseif ($c.Code -eq 407) { $etat = "ATTENTION" ; $detail = ("proxy " + $hoteProxy + ":" + $portProxy + " joignable ; 407 (authentification : " + $c.Schemes + ")") }
             else { $etat = "ATTENTION" ; $detail = ("proxy joignable ; CONNECT refuse : " + $c.Detail) }
         }
     } else {
@@ -1127,10 +1129,15 @@ function Get-Diagnostic {
     }
     [void]$items.Add(@{ Nom = "Proxy joignable" ; Etat = $etat ; Detail = $detail })
 
-    # 5. DNS du KMS
+    # 5. DNS du KMS (cle KmsServer de config.json, "hote:port" ; KmsHost/KmsPort tolere)
     $kms = $KMS_SERVEUR ; $portKms = $KMS_PORT
-    foreach ($nomChamp in @("KmsHost", "KmsAdresse", "KmsServer")) {
-        if ($null -ne $cfg -and $cfg.PSObject.Properties[$nomChamp] -and -not [string]::IsNullOrWhiteSpace([string]$cfg.$nomChamp)) { $kms = [string]$cfg.$nomChamp ; break }
+    if ($null -ne $cfg) {
+        foreach ($nomChamp in @("KmsServer", "KmsAdresse", "KmsHost")) {
+            if ($cfg.PSObject.Properties[$nomChamp] -and -not [string]::IsNullOrWhiteSpace([string]$cfg.$nomChamp)) { $kms = ([string]$cfg.$nomChamp).Trim() ; break }
+        }
+        # Un hote et un port separes ne doivent pas perdre le port au profit du 1688 par
+        # defaut : c'est cette valeur qui decide du serveur contacte a l'activation.
+        if (($kms -notmatch ':\d+$') -and $cfg.PSObject.Properties["KmsPort"] -and ([string]$cfg.KmsPort -match '^\d+$')) { $portKms = [string]$cfg.KmsPort }
     }
     if ($kms -match '^(?<h>[^:]+):(?<p>\d+)$') { $kms = $Matches.h ; $portKms = $Matches.p }
     if ($kms -match '(?i)VOTRE-SERVEUR') {

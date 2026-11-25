@@ -28,7 +28,7 @@ Le dossier extrait contient tout : le programme, ses fenêtres (`Maquette\`), le
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `Install-Office2024-KMS.ps1` | Moteur : déroulé de déploiement extrait par l'EXE ; son interface WinForms historique reste exécutable telle quelle |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (161 cas, `-Fast` pour la section 1 seule) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (163 cas, `-Fast` pour la section 1 seule) |
 | `version.txt` | Version de l'outil, source unique : le badge, le README, le script et `Compare-ExeRecompilation.ps1` s'y comparent |
 | `Set-Version.ps1` | Vérifie ou écrit cette version partout, et refuse si un emplacement diverge |
 | `New-Livraison.ps1` | Construit `Livraison.zip` en liste blanche, avec `SHA256SUMS` |
@@ -83,6 +83,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-Office2024-KMS.ps1
 ```
 
 Lecture seule, sans élévation et sans fenêtre : six points sont mesurés, puis un verdict.
+`-ConfigFile <chemin>` relit un autre `config.json` que celui du profil (configuration de
+test isolée) ; le mode ne l'écrit jamais.
 
 | Point | Ce qui est mesuré |
 | --- | --- |
@@ -375,14 +377,28 @@ Pousser un tag `v*` déclenche `.github/workflows/publication-livraison.yml` :
 
 1. le tag doit correspondre à `version.txt` (`v8.5.1` pour `8.5.1.0`), sinon le job
    s'arrête avant de construire quoi que ce soit ;
-2. `New-Livraison.ps1` construit `Livraison.zip` depuis le commit tagué ;
-3. l'archive est extraite dans un dossier de travail et le `Verifier-Livraison.ps1`
+2. avant toute construction, `Test-InstallOffice.ps1 -Fast` vérifie que l'EXE du tag
+   embarque bien le script tagué (empreinte et version), puis le workflow compare
+   l'empreinte du binaire à la ligne `SHA256 Install-Office2024-KMS.exe` du README :
+   un binaire désynchronisé refuse la publication ;
+3. `New-Livraison.ps1` construit `Livraison.zip` depuis le commit tagué ;
+4. l'archive est extraite dans un dossier de travail et le `Verifier-Livraison.ps1`
    qu'elle contient est rejoué dessus, comme sur un poste sans git ;
-4. la taille et le SHA-256 du ZIP sont calculés, inscrits dans les notes de release,
-   puis `Livraison.zip` est attaché à la release GitHub du tag.
+5. la taille et le SHA-256 du ZIP sont calculés, puis `Livraison.zip` est attaché à la
+   release GitHub du tag, avec ces valeurs dans les notes.
 
-Un re-run du même tag remplace l'asset (`--clobber`) au lieu d'échouer sur une release
+Chaque étape s'arrête sur un code non nul : tag incohérent, EXE désynchronisé, ZIP
+incomplet ou refusé, empreinte absente. Aucune release n'est créée dans ces cas. Un
+re-run du même tag remplace l'asset (`--clobber`) au lieu d'échouer sur une release
 existante. Le jeton du dépôt suffit : le workflow demande `contents: write`.
+
+**Répétition avant un tag** : lancer le workflow manuellement (Actions → *Publication
+de la livraison* → *Run workflow*) rejoue la construction et toutes les vérifications
+sur la branche choisie — `Test-InstallOffice.ps1 -Fast`, empreinte du README,
+`Livraison.zip`, extraction et `Verifier-Livraison.ps1`, taille et SHA-256 — mais
+saute le contrôle de tag et la publication. Aucune release n'est créée : le journal
+donne la taille et le SHA-256 du ZIP construit, ce qui valide le workflow avant de
+poser le vrai tag.
 
 ## Journaux et configuration
 
@@ -401,7 +417,7 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps
 embarqué, propriétés de l'EXE, présence des fichiers livrés avec lui et interface ouverte
 hors écran avec chaque nom résolu — soit quelques secondes : c'est exactement ce que lance
 le hook avant chaque commit. Sans commutateur, la
-suite complète (161 cas) tourne, comme sur GitHub.
+suite complète (163 cas) tourne, comme sur GitHub.
 
 Le **dernier contrôle** de la suite relit ce README, y cherche toutes les mentions
 « N cas » et exige qu'elles valent le total réellement exécuté : un cas ajouté ou retiré
@@ -525,7 +541,7 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   ralenti ; `git commit --no-verify` reste possible pour un cas exceptionnel, et se voit
   dans l'historique.
 - **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la suite
-  **complète** (161 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
+  **complète** (163 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
   request : un EXE oublié ou compilé autrement fait échouer la vérification côté serveur,
   même si le hook local n'était pas installé — et sans rien imposer à la boucle locale.
 - **et la recompilation y est vérifiée aussi** : un job à part installe `ps2exe`,

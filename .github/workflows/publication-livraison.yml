@@ -5,9 +5,13 @@ name: Publication de la livraison
 # extrait par Verifier-Livraison.ps1, puis attache a la release GitHub avec sa
 # taille et son SHA-256 dans les notes. Le tag doit correspondre a version.txt :
 # un tag pose sur un commit qui annonce une autre version echoue avant de publier.
+# Un lancement manuel (workflow_dispatch) rejoue la meme construction et les memes
+# verifications sur la branche choisie, mais ne publie rien : c'est la repetition a
+# faire avant de poser un tag.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -27,14 +31,12 @@ jobs:
       - name: Recuperer le depot
         uses: actions/checkout@v4
 
-      - name: Version de PowerShell
-        shell: powershell
-        run: $PSVersionTable.PSVersion.ToString()
-
       # Le tag porte la version annoncee au poste : version.txt, l'EXE et le README
       # sont deja controles ensemble sur main. Ici, on refuse un tag qui ne colle pas
       # a version.txt (v8.5.1 correspond a 8.5.1.0), avant de construire quoi que ce soit.
+      # Un lancement manuel n'a pas de tag : la repetition saute ce controle.
       - name: Verifier que le tag correspond a version.txt
+        if: github.event_name == 'push'
         shell: powershell
         run: |
           $tag = $env:GITHUB_REF_NAME
@@ -45,15 +47,16 @@ jobs:
           }
           "Tag $tag aligne sur version.txt ($version)."
 
-      # Rien ne part si le binaire du depot n'embarque pas le script tague, ou si le
-      # README annonce une autre empreinte que l'EXE livre : c'est exactement ce que
-      # la suite rapide et la ligne SHA256 du README controlent deja sur main.
-      - name: Verifier le binaire livre avant de construire
+      # Garde-fou de publication : rien n'est construit ni publie si l'EXE commite
+      # n'embarque pas le script tague, ou si le README annonce une autre empreinte
+      # que l'EXE livre. Une seule execution de la suite rapide suffit : cette etape
+      # precede la construction et la release, donc son echec ferme les deux.
+      - name: Verifier l'EXE du tag et son empreinte README
         shell: powershell
         run: |
           $ErrorActionPreference = 'Continue'
           & powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps1 -Fast
-          if ($LASTEXITCODE -ne 0) { throw "Suite rapide en echec (code $LASTEXITCODE) : EXE ou version desynchronises, rien n'est publie." }
+          if ($LASTEXITCODE -ne 0) { throw "Suite rapide en echec (code $LASTEXITCODE) : l'EXE du tag ne correspond pas au script, rien n'est publie." }
           $hash = (Get-FileHash .\Install-Office2024-KMS.exe -Algorithm SHA256).Hash.ToUpperInvariant()
           $readme = [System.IO.File]::ReadAllText((Join-Path $PWD 'README.md'))
           $m = [regex]::Match($readme, '(?m)^SHA256 Install-Office2024-KMS\.exe\s*=\s*([0-9a-fA-F]{64})\s*$')
@@ -67,6 +70,7 @@ jobs:
           $ErrorActionPreference = 'Continue'
           & powershell -NoProfile -ExecutionPolicy Bypass -File .\New-Livraison.ps1
           if ($LASTEXITCODE -ne 0) { throw "New-Livraison.ps1 a echoue (code $LASTEXITCODE)." }
+          if (-not (Test-Path -LiteralPath .\Livraison.zip)) { throw "Livraison.zip absent apres New-Livraison.ps1 : rien a publier." }
 
       # Verification sur l'archive elle-meme : on l'extrait dans un dossier de travail
       # et on lance le Verifier-Livraison.ps1 qu'elle contient, comme le ferait un poste
@@ -74,30 +78,45 @@ jobs:
       - name: Verifier l'archive extraite
         shell: powershell
         run: |
-          $ErrorActionPreference = 'Continue'
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $PWD 'Livraison.zip'
+          if (-not (Test-Path -LiteralPath $zip)) { throw "Livraison.zip absent : rien a verifier, publication refusee." }
           $tmp = Join-Path $env:RUNNER_TEMP 'livraison-verif'
           if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
-          Expand-Archive -LiteralPath .\Livraison.zip -DestinationPath $tmp
-          & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $tmp 'Verifier-Livraison.ps1') -Dossier $tmp
+          Expand-Archive -LiteralPath $zip -DestinationPath $tmp
+          $verif = Join-Path $tmp 'Verifier-Livraison.ps1'
+          if (-not (Test-Path -LiteralPath $verif)) { throw "Verifier-Livraison.ps1 absent de l'archive : ZIP incomplet, publication refusee." }
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $verif -Dossier $tmp
           if ($LASTEXITCODE -ne 0) { throw "Verifier-Livraison.ps1 a refuse l'archive (code $LASTEXITCODE)." }
 
       - name: Calculer taille et SHA-256
         id: empreinte
         shell: powershell
         run: |
-          $zip = Get-Item .\Livraison.zip
+          $ErrorActionPreference = 'Stop'
+          $zip = Get-Item -LiteralPath .\Livraison.zip
+          if ($zip.Length -le 0) { throw "Livraison.zip vide : rien a publier." }
           $sha = (Get-FileHash -LiteralPath $zip.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          "taille=$($zip.Length)" >> $env:GITHUB_OUTPUT
-          "sha=$sha" >> $env:GITHUB_OUTPUT
+          # UTF-8 sans BOM : >> ecrirait de l'UTF-16 en PowerShell 5.1, que le runner
+          # ne relit pas de facon fiable.
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "taille=$($zip.Length)`n", $utf8)
+          [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "sha=$sha`n", $utf8)
           "Livraison.zip : $($zip.Length) octets, SHA-256 $sha"
 
+      # Jamais de publication sur un lancement manuel : la repetition construit et
+      # verifie le ZIP, puis s'arrete ici. Seul un tag v* cree une release.
       - name: Publier la release
+        if: github.event_name == 'push'
         shell: powershell
         env:
           TAILLE: ${{ steps.empreinte.outputs.taille }}
           SHA: ${{ steps.empreinte.outputs.sha }}
         run: |
           $tag = $env:GITHUB_REF_NAME
+          if ([string]::IsNullOrWhiteSpace($env:TAILLE) -or ($env:SHA -notmatch '^[0-9a-f]{64}$')) {
+            throw "Taille ou SHA-256 du ZIP absent : l'etape de calcul n'a rien produit, publication refusee."
+          }
           $bq = [char]96
           $mo = ([math]::Round([long]$env:TAILLE / 1MB, 1)).ToString()
           $notes = @(
@@ -118,8 +137,16 @@ jobs:
 
           # Un re-run du meme tag remplace l'asset au lieu d'echouer sur une release
           # existante : la release reste celle du tag, avec l'archive de ce commit.
-          gh release view $tag --json tagName *> $null
-          if ($LASTEXITCODE -eq 0) {
+          # La liste tranche l'existence ; une erreur de gh (jeton, reseau) est remontee
+          # ici, avant toute ecriture, au lieu d'etre confondue avec une premiere release.
+          $json = gh release list --limit 1000 --json tagName
+          if ($LASTEXITCODE -ne 0) { throw "gh release list a echoue (code $LASTEXITCODE) : impossible de savoir si la release existe." }
+          $deja = $false
+          if (-not [string]::IsNullOrWhiteSpace(($json -join ""))) {
+            $liste = @((($json -join "`n") | ConvertFrom-Json))
+            $deja = @($liste | Where-Object { $_.tagName -eq $tag }).Count -gt 0
+          }
+          if ($deja) {
             gh release edit $tag --notes-file $notesPath
             if ($LASTEXITCODE -ne 0) { throw "gh release edit a echoue (code $LASTEXITCODE)." }
             gh release upload $tag .\Livraison.zip --clobber

@@ -2197,6 +2197,58 @@ public class FakeAuthProxy
     $pointsDiag = @("Espace disque", "Office deja present", "Droits administrateur", "Proxy joignable", "DNS KMS", "Horloge", "Verdict")
     $manquantsDiag = @($pointsDiag | Where-Object { $sortieDiag -notmatch [regex]::Escape($_) })
     Check "diagnostic : six points verifies et verdict, sans installation" (($codeDiag -eq 0 -or $codeDiag -eq 1) -and ($manquantsDiag.Count -eq 0)) ("code=" + $codeDiag + " manquants=" + ($manquantsDiag -join ", ") + " ; " + ($sortieDiag -replace "\s+", " "))
+
+    # Configuration isolee, jamais le profil reel : le moteur relit le fichier donne par
+    # -ConfigFile. Les valeurs posees ici n'existent nulle part ailleurs (port du proxy
+    # attribue par le systeme, port KMS 1699) : les voir dans le rapport prouve une lecture
+    # du fichier, pas des intitules ni des valeurs par defaut.
+    $dossierIso = Join-Path $Work "config_diag"
+    New-Item -ItemType Directory -Path $dossierIso -Force | Out-Null
+    $cfgIso = Join-Path $dossierIso "config.json"
+    $cfgProfilReel = Join-Path $env:APPDATA "Office2024Deploy\config.json"
+    $profilAvant = if (Test-Path -LiteralPath $cfgProfilReel) { (Get-FileHash -LiteralPath $cfgProfilReel -Algorithm SHA256).Hash } else { "(absent)" }
+    $proxyDiag = New-Object FakeAuthProxy -ArgumentList @("diag", "secret")
+    $proxyDiag.Start()
+    [ordered]@{
+        KmsServer    = "127.0.0.1:1699"
+        ProxyEnabled = $true
+        ProxyHost    = "127.0.0.1"
+        ProxyPort    = [string]$proxyDiag.Port
+    } | ConvertTo-Json | Set-Content -LiteralPath $cfgIso -Encoding UTF8
+    $sortieIso = ""
+    $codeIso = -1
+    $eapIso = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $sortieIso = (& $psHost -NoProfile -ExecutionPolicy Bypass -File $EngineScript -Diagnostic -ConfigFile $cfgIso 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+        $codeIso = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $eapIso }
+    $proxyDiag.Stop()
+    $profilApres = if (Test-Path -LiteralPath $cfgProfilReel) { (Get-FileHash -LiteralPath $cfgProfilReel -Algorithm SHA256).Hash } else { "(absent)" }
+    $attenduProxy = "proxy 127.0.0.1:" + $proxyDiag.Port + " joignable ; 407 (authentification : Basic)"
+    $attenduKms   = "DNS KMS : 127.0.0.1 -> 127.0.0.1 (port 1699)"
+    $lectureIso = ($sortieIso -match [regex]::Escape($attenduProxy)) -and ($sortieIso -match [regex]::Escape($attenduKms)) -and
+                  (($codeIso -eq 0) -or ($codeIso -eq 1)) -and ($cfgIso.StartsWith($Work)) -and ($profilAvant -eq $profilApres)
+    Check "diagnostic : proxy et KMS lus dans une configuration isolee (profil reel intact)" $lectureIso ("code=" + $codeIso + " attendu proxy=[" + $attenduProxy + "] attendu KMS=[" + $attenduKms + "] profil " + $profilAvant + " -> " + $profilApres + " ; " + ($sortieIso -replace "\s+", " "))
+
+    # Deuxieme configuration isolee : le diagnostic doit suivre ProxyEnabled et le port
+    # KMS du fichier, pas ceux du premier essai ni les valeurs par defaut.
+    [ordered]@{
+        KmsServer    = "127.0.0.1:1700"
+        ProxyEnabled = $false
+        ProxyHost    = ""
+        ProxyPort    = ""
+    } | ConvertTo-Json | Set-Content -LiteralPath $cfgIso -Encoding UTF8
+    $sortieIso2 = ""
+    $codeIso2 = -1
+    $eapIso2 = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $sortieIso2 = (& $psHost -NoProfile -ExecutionPolicy Bypass -File $EngineScript -Diagnostic -ConfigFile $cfgIso 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+        $codeIso2 = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $eapIso2 }
+    $attenduKms2 = "DNS KMS : 127.0.0.1 -> 127.0.0.1 (port 1700)"
+    Check "diagnostic : configuration isolee sans proxy -> acces direct et port KMS du fichier" (($codeIso2 -eq 0 -or $codeIso2 -eq 1) -and ($sortieIso2 -match [regex]::Escape("aucun proxy dans la configuration ; acces direct")) -and ($sortieIso2 -match [regex]::Escape($attenduKms2)) -and ($sortieIso2 -notmatch [regex]::Escape("1699"))) ("code=" + $codeIso2 + " ; " + ($sortieIso2 -replace "\s+", " "))
 }
 catch {
     Write-Host ("ERREUR DU HARNAIS : " + $_.Exception.Message) -ForegroundColor Red
