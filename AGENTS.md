@@ -68,6 +68,6 @@ Office de plusieurs Go) : leur absence est normale.
 powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps1
 ```
 
-163 cas, environ 100 s ; le code de sortie vaut 0 seulement si tout passe. Sur un poste dont
+170 cas, environ 100 s ; le code de sortie vaut 0 seulement si tout passe. Sur un poste dont
 les polices diffèrent de celles des références, la suite signale les captures différentes
 sans échouer ; c'est attendu, pas une régression.

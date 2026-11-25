@@ -89,7 +89,16 @@
           <Border Style="{StaticResource Carte}">
             <StackPanel>
               <Grid>
-                <TextBlock Text="Progression" Style="{StaticResource TitreCarte}"/>
+                <Border Style="{StaticResource Section}" BorderBrush="{StaticResource Accent}"
+                        ToolTipService.InitialShowDelay="300" ToolTipService.ShowDuration="12000">
+                  <Border.ToolTip>
+                    <ToolTip>
+                      <TextBlock Text="Suivez les cinq étapes du déploiement. La jauge et les points de contrôle indiquent l’étape en cours et les vérifications déjà passées."
+                                 TextWrapping="Wrap" MaxWidth="320"/>
+                    </ToolTip>
+                  </Border.ToolTip>
+                  <TextBlock Text="Progression" Style="{StaticResource TitreSection}" Foreground="{StaticResource Accent}"/>
+                </Border>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                   <TextBlock x:Name="EtapePourcent" Text="0 %" Style="{StaticResource Secondaire}"/>
                   <TextBlock Text="  ·  5 étapes" Style="{StaticResource Secondaire}"/>
@@ -218,7 +227,16 @@
           <Border Grid.Row="2" Style="{StaticResource Carte}">
             <StackPanel>
               <Grid>
-                <TextBlock Text="Vérifications pré-vol" Style="{StaticResource TitreCarte}"/>
+                <Border Style="{StaticResource Section}" BorderBrush="{StaticResource AccentTeal}"
+                        ToolTipService.InitialShowDelay="300" ToolTipService.ShowDuration="12000">
+                  <Border.ToolTip>
+                    <ToolTip>
+                      <TextBlock Text="Contrôle setup.exe, l’espace disque, le serveur KMS et la version de Windows. Corrigez ce qui est signalé, puis cliquez sur Rafraîchir."
+                                 TextWrapping="Wrap" MaxWidth="320"/>
+                    </ToolTip>
+                  </Border.ToolTip>
+                  <TextBlock Text="Vérifications pré-vol" Style="{StaticResource TitreSection}" Foreground="{StaticResource AccentTeal}"/>
+                </Border>
                 <Button x:Name="BtnRafraichir" Style="{StaticResource BoutonSecondaire}" Content="Rafraîchir"
                         Padding="10,2" FontSize="12" HorizontalAlignment="Right"/>
               </Grid>
@@ -273,7 +291,16 @@
                 <RowDefinition Height="*"/>
               </Grid.RowDefinitions>
               <Grid Grid.Row="0" Margin="0,0,0,10">
-                <TextBlock Text="Journal" Style="{StaticResource TitreCarte}"/>
+                <Border Style="{StaticResource Section}" BorderBrush="{StaticResource AccentArdoise}"
+                        ToolTipService.InitialShowDelay="300" ToolTipService.ShowDuration="12000">
+                  <Border.ToolTip>
+                    <ToolTip>
+                      <TextBlock Text="Historique du déploiement en cours. Effacer vide l’affichage ; Exporter enregistre le journal dans un fichier."
+                                 TextWrapping="Wrap" MaxWidth="320"/>
+                    </ToolTip>
+                  </Border.ToolTip>
+                  <TextBlock Text="Journal" Style="{StaticResource TitreSection}" Foreground="{StaticResource AccentArdoise}"/>
+                </Border>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                   <TextBlock Text="Deploiement_20261122.log" Style="{StaticResource Secondaire}"
                              VerticalAlignment="Center" Margin="0,0,10,0"/>
@@ -306,7 +333,16 @@
                         HorizontalScrollBarVisibility="Disabled">
             <Border Style="{StaticResource Carte}" VerticalAlignment="Top">
               <StackPanel>
-                <TextBlock Text="Options" Style="{StaticResource TitreCarte}"/>
+                <Border Style="{StaticResource Section}" BorderBrush="{StaticResource Accent}"
+                        ToolTipService.InitialShowDelay="300" ToolTipService.ShowDuration="12000">
+                  <Border.ToolTip>
+                    <ToolTip>
+                      <TextBlock Text="Renseignez l’installation, les sources, le XML, l’activation KMS et le proxy. Vérifiez ces choix avant de lancer l’installation."
+                                 TextWrapping="Wrap" MaxWidth="320"/>
+                    </ToolTip>
+                  </Border.ToolTip>
+                  <TextBlock Text="Options" Style="{StaticResource TitreSection}" Foreground="{StaticResource Accent}"/>
+                </Border>
 
                 <!-- Installation -->
                 <TextBlock Text="Installation" FontSize="12" FontWeight="SemiBold"

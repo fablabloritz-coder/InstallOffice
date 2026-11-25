@@ -28,7 +28,7 @@ Le dossier extrait contient tout : le programme, ses fenêtres (`Maquette\`), le
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `Install-Office2024-KMS.ps1` | Moteur : déroulé de déploiement extrait par l'EXE ; son interface WinForms historique reste exécutable telle quelle |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (163 cas, `-Fast` pour la section 1 seule) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (170 cas, `-Fast` pour la section 1 seule) |
 | `version.txt` | Version de l'outil, source unique : le badge, le README, le script et `Compare-ExeRecompilation.ps1` s'y comparent |
 | `Set-Version.ps1` | Vérifie ou écrit cette version partout, et refuse si un emplacement diverge |
 | `New-Livraison.ps1` | Construit `Livraison.zip` en liste blanche, avec `SHA256SUMS` |
@@ -84,19 +84,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-Office2024-KMS.ps1
 
 Lecture seule, sans élévation et sans fenêtre : six points sont mesurés, puis un verdict.
 `-ConfigFile <chemin>` relit un autre `config.json` que celui du profil (configuration de
-test isolée) ; le mode ne l'écrit jamais.
+test isolée) ; le mode ne l'écrit jamais. `-TimeSource <hote[:port]>` impose la source
+SNTP de la mesure d'horloge (par défaut la source Windows, puis `time.windows.com`).
+`-SystemProxy <hote[:port]|direct>` force le proxy système mesuré (`direct` pour forcer
+l'absence de proxy dans un test isolé).
 
 | Point | Ce qui est mesuré |
 | --- | --- |
 | Espace disque | Go libres sur `C:`, comparés au minimum de 4 Go |
 | Office déjà présent | entrées d'installation Office dans le registre, dont Office LTSC 2024 |
 | Droits administrateur | session courante, élevée ou non |
-| Proxy joignable | proxy de la configuration : port, puis `CONNECT officecdn.microsoft.com:443` ; sans proxy, accès direct annoncé |
+| Proxy joignable | proxy de la configuration, sinon proxy système (WinHTTP machine, puis WinINet session) : port, puis `CONNECT officecdn.microsoft.com:443` ; accès direct annoncé seulement si les deux couches sont lisibles et sans proxy, sinon « accès direct non prouvé » |
 | DNS KMS | résolution du serveur KMS configuré (port 1688) ; l'adresse d'exemple est signalée |
-| Horloge | date, fuseau, source de temps Windows et état du service `W32Time` |
+| Horloge | date, fuseau, source, état du service `W32Time` et écart mesuré par SNTP ; au-delà de 4 h (tolérance KMS) le point est bloquant, sans source joignable il reste un avertissement |
 
 Chaque ligne porte `[OK]`, `[ATTENTION]` ou `[BLOQUANT]` ; le code de sortie vaut 1 s'il
-reste un point bloquant (espace disque insuffisant), 0 sinon. Rien n'est écrit : ni journal,
+reste un point bloquant (espace disque insuffisant ou écart d'horloge supérieur à 4 h), 0 sinon. Rien n'est écrit : ni journal,
 ni `config.json`, ni réglage proxy. Lancé sans droits administrateur, il le dit au lieu de
 demander une élévation : c'est justement l'un des points mesurés.
 
@@ -417,7 +420,7 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps
 embarqué, propriétés de l'EXE, présence des fichiers livrés avec lui et interface ouverte
 hors écran avec chaque nom résolu — soit quelques secondes : c'est exactement ce que lance
 le hook avant chaque commit. Sans commutateur, la
-suite complète (163 cas) tourne, comme sur GitHub.
+suite complète (170 cas) tourne, comme sur GitHub.
 
 Le **dernier contrôle** de la suite relit ce README, y cherche toutes les mentions
 « N cas » et exige qu'elles valent le total réellement exécuté : un cas ajouté ou retiré
@@ -541,7 +544,7 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   ralenti ; `git commit --no-verify` reste possible pour un cas exceptionnel, et se voit
   dans l'historique.
 - **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la suite
-  **complète** (163 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
+  **complète** (170 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
   request : un EXE oublié ou compilé autrement fait échouer la vérification côté serveur,
   même si le hook local n'était pas installé — et sans rien imposer à la boucle locale.
 - **et la recompilation y est vérifiée aussi** : un job à part installe `ps2exe`,

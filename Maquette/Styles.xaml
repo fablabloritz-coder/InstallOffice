@@ -9,6 +9,8 @@
   <SolidColorBrush x:Key="Texte2" Color="#5D5D5D"/>
   <SolidColorBrush x:Key="Accent" Color="#0F6CBD"/>
   <SolidColorBrush x:Key="AccentFonce" Color="#115EA3"/>
+  <SolidColorBrush x:Key="AccentTeal" Color="#0E7C86"/>
+  <SolidColorBrush x:Key="AccentArdoise" Color="#5B6B7C"/>
   <SolidColorBrush x:Key="Succes" Color="#0F7B0F"/>
   <SolidColorBrush x:Key="Piste" Color="#EBEBEB"/>
   <SolidColorBrush x:Key="ChampBord" Color="#D6D6D6"/>
@@ -25,6 +27,15 @@
     <Setter Property="FontSize" Value="14"/>
     <Setter Property="FontWeight" Value="SemiBold"/>
     <Setter Property="Foreground" Value="{StaticResource Texte}"/>
+  </Style>
+  <Style x:Key="Section" TargetType="Border">
+    <Setter Property="BorderThickness" Value="3,0,0,0"/>
+    <Setter Property="Padding" Value="8,0,0,0"/>
+    <Setter Property="HorizontalAlignment" Value="Left"/>
+    <Setter Property="VerticalAlignment" Value="Center"/>
+  </Style>
+  <Style x:Key="TitreSection" TargetType="TextBlock" BasedOn="{StaticResource TitreCarte}">
+    <Setter Property="Foreground" Value="{StaticResource Accent}"/>
   </Style>
   <Style x:Key="Secondaire" TargetType="TextBlock">
     <Setter Property="Foreground" Value="{StaticResource Texte2}"/>

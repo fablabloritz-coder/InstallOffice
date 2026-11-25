@@ -2183,7 +2183,37 @@ public class FakeAuthProxy
     Section "15. Mode diagnostic (lecture seule)"
     # Le moteur est lance comme un utilisateur le ferait, sans droits administrateur :
     # le mode doit rendre ses six points et un verdict sans ouvrir de fenetre ni toucher
-    # au poste. On exige les intitules, pas les valeurs (proxy, DNS et KMS dependent du reseau).
+    # au poste. Un seul cas compare des valeurs mesurees ici (espace libre, etat admin)
+    # et l'absence d'ecriture (config, HKCU, netsh, environnement) : un rapport fige
+    # ou un diagnostic qui ecrit echoue.
+    $cfgReelDiag = Join-Path $env:APPDATA "Office2024Deploy\config.json"
+    $dossierCfgDiag = Split-Path -Parent $cfgReelDiag
+    function Get-EtatCfgDiag {
+        $dossier = Test-Path -LiteralPath $dossierCfgDiag
+        $fichier = if (Test-Path -LiteralPath $cfgReelDiag) {
+            $f = Get-Item -LiteralPath $cfgReelDiag
+            (Get-FileHash -LiteralPath $cfgReelDiag -Algorithm SHA256).Hash + "|" + $f.LastWriteTimeUtc.Ticks + "|" + $f.Length
+        } else { "(absent)" }
+        return @{ Fichier = $fichier ; Dossier = $dossier }
+    }
+    $etatCfgAvant = Get-EtatCfgDiag
+    $cleInetDiag = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings"
+    $regDiagAvant = @{}
+    foreach ($p in @("ProxyEnable","ProxyServer","ProxyOverride")) {
+        $regDiagAvant[$p] = $null
+        try { $regDiagAvant[$p] = Get-ItemPropertyValue -Path $cleInetDiag -Name $p -ErrorAction Stop } catch {}
+    }
+    $netshDiagAvant = ((& netsh winhttp show proxy 2>&1) -join "`n").Trim()
+    $envDiagAvant = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+    foreach ($n in @("HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy")) {
+        foreach ($portee in @("Process","User","Machine")) {
+            $envDiagAvant[$portee + ":" + $n] = [System.Environment]::GetEnvironmentVariable($n, $portee)
+        }
+    }
+    $driveAvant = Get-PSDrive C -ErrorAction SilentlyContinue
+    $espaceDiagAvant = if ($driveAvant) { [math]::Round($driveAvant.Free / 1GB, 1) } else { -1 }
+    $estAdminDiag = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    $adminDiagAttendu = if ($estAdminDiag) { "session administrateur" } else { "session standard" }
     $sortieDiag = ""
     $codeDiag = -1
     if (Test-Path -LiteralPath $EngineScript) {
@@ -2194,9 +2224,41 @@ public class FakeAuthProxy
             $codeDiag = $LASTEXITCODE
         } finally { $ErrorActionPreference = $eapDiag }
     }
+    $etatCfgApres = Get-EtatCfgDiag
+    $regDiagApres = @{}
+    foreach ($p in @("ProxyEnable","ProxyServer","ProxyOverride")) {
+        $regDiagApres[$p] = $null
+        try { $regDiagApres[$p] = Get-ItemPropertyValue -Path $cleInetDiag -Name $p -ErrorAction Stop } catch {}
+    }
+    $netshDiagApres = ((& netsh winhttp show proxy 2>&1) -join "`n").Trim()
+    $envDiagApres = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+    foreach ($n in @("HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy")) {
+        foreach ($portee in @("Process","User","Machine")) {
+            $envDiagApres[$portee + ":" + $n] = [System.Environment]::GetEnvironmentVariable($n, $portee)
+        }
+    }
+    $driveApres = Get-PSDrive C -ErrorAction SilentlyContinue
+    $espaceDiagApres = if ($driveApres) { [math]::Round($driveApres.Free / 1GB, 1) } else { -1 }
+    $espaceReelMin = [math]::Min($espaceDiagAvant, $espaceDiagApres)
+    $espaceReelMax = [math]::Max($espaceDiagAvant, $espaceDiagApres)
+    $mEspace = [regex]::Match($sortieDiag, 'Espace disque C:\s*:\s*([0-9]+(?:[.,][0-9]+)?)\s*Go libres\s*;\s*minimum\s*([0-9]+(?:[.,][0-9]+)?)\s*Go')
+    $espaceDiag = if ($mEspace.Success) { [double]($mEspace.Groups[1].Value -replace ',', '.') } else { -1 }
+    $minimumDiag = if ($mEspace.Success) { [double]($mEspace.Groups[2].Value -replace ',', '.') } else { -1 }
+    $espaceOk = ($espaceDiag -ge ($espaceReelMin - 0.5)) -and ($espaceDiag -le ($espaceReelMax + 0.5))
+    $mAdmin = [regex]::Match($sortieDiag, 'Droits administrateur\s*:\s*(session administrateur|session standard)')
+    $adminDiag = if ($mAdmin.Success) { $mAdmin.Groups[1].Value } else { "" }
+    $adminOk = ($adminDiag -eq $adminDiagAttendu)
+    $cfgInchange = ($etatCfgAvant.Fichier -eq $etatCfgApres.Fichier) -and ($etatCfgAvant.Dossier -eq $etatCfgApres.Dossier)
+    $regInchange = ($regDiagAvant.ProxyEnable -eq $regDiagApres.ProxyEnable) -and ($regDiagAvant.ProxyServer -eq $regDiagApres.ProxyServer) -and ($regDiagAvant.ProxyOverride -eq $regDiagApres.ProxyOverride)
+    $netshInchange = ($netshDiagAvant -eq $netshDiagApres)
+    $envInchange = $true
+    foreach ($cleEnv in @($envDiagAvant.Keys)) {
+        if ($envDiagAvant[$cleEnv] -ne $envDiagApres[$cleEnv]) { $envInchange = $false }
+    }
     $pointsDiag = @("Espace disque", "Office deja present", "Droits administrateur", "Proxy joignable", "DNS KMS", "Horloge", "Verdict")
     $manquantsDiag = @($pointsDiag | Where-Object { $sortieDiag -notmatch [regex]::Escape($_) })
-    Check "diagnostic : six points verifies et verdict, sans installation" (($codeDiag -eq 0 -or $codeDiag -eq 1) -and ($manquantsDiag.Count -eq 0)) ("code=" + $codeDiag + " manquants=" + ($manquantsDiag -join ", ") + " ; " + ($sortieDiag -replace "\s+", " "))
+    $lectureSeuleOk = ($sortieDiag -match 'Aucune installation, aucun reglage modifie') -and $cfgInchange -and $regInchange -and $netshInchange -and $envInchange
+    Check "diagnostic : valeurs reelles, six points et aucune ecriture" (($codeDiag -eq 0 -or $codeDiag -eq 1) -and ($manquantsDiag.Count -eq 0) -and $espaceOk -and ($minimumDiag -eq 4) -and $adminOk -and $lectureSeuleOk) ("code=" + $codeDiag + " manquants=" + ($manquantsDiag -join ", ") + " espace rapport=" + $espaceDiag + " reel=" + $espaceDiagAvant + ".." + $espaceDiagApres + " min=" + $minimumDiag + " admin rapport=[" + $adminDiag + "] reel=[" + $adminDiagAttendu + "] lecture seule=" + $lectureSeuleOk + " (config=" + $cfgInchange + " HKCU=" + $regInchange + " netsh=" + $netshInchange + " env=" + $envInchange + ") ; " + ($sortieDiag -replace "\s+", " "))
 
     # Configuration isolee, jamais le profil reel : le moteur relit le fichier donne par
     # -ConfigFile. Les valeurs posees ici n'existent nulle part ailleurs (port du proxy
@@ -2209,12 +2271,50 @@ public class FakeAuthProxy
     $profilAvant = if (Test-Path -LiteralPath $cfgProfilReel) { (Get-FileHash -LiteralPath $cfgProfilReel -Algorithm SHA256).Hash } else { "(absent)" }
     $proxyDiag = New-Object FakeAuthProxy -ArgumentList @("diag", "secret")
     $proxyDiag.Start()
-    [ordered]@{
-        KmsServer    = "127.0.0.1:1699"
-        ProxyEnabled = $true
-        ProxyHost    = "127.0.0.1"
-        ProxyPort    = [string]$proxyDiag.Port
-    } | ConvertTo-Json | Set-Content -LiteralPath $cfgIso -Encoding UTF8
+    # Le fichier vient de Save-ConfigPoste, la fonction qui enregistre les champs de
+    # l'ecran : le nom du champ KMS est donc celui que l'interface ecrit reellement.
+    # Le test retrouve ce champ par sa valeur unique, puis exige que le diagnostic
+    # lise cette valeur : un renommage non suivi retombe sur l'adresse d'exemple.
+    $champsPoste = @{
+        ChampSetup      = @{ Text = "C:\fake\setup.exe" }
+        ChampKms        = @{ Text = "127.0.0.1:1699" }
+        LangueTexte     = @{ Text = "fr-fr" }
+        ChampProxy      = @{ Text = "127.0.0.1" }
+        ChampPort       = @{ Text = [string]$proxyDiag.Port }
+        ChampBypass     = @{ Text = "<local>" }
+        ChampProxyUser  = @{ Text = "" }
+        ChampDepot      = @{ Text = "" }
+        ChampKmsSecours = @{ Text = "" }
+        ChampCle        = @{ Text = "" }
+    }
+    $fenetrePoste = New-Object PSObject
+    $fenetrePoste | Add-Member -MemberType NoteProperty -Name Champs -Value $champsPoste
+    $fenetrePoste | Add-Member -MemberType ScriptMethod -Name FindName -Value { param($n) return $this.Champs[$n] }
+    $cfgPoste = [pscustomobject]@{
+        RemoveOld       = $false
+        DoInstall       = $false
+        DoActivate      = $true
+        UseCustomXML    = $false
+        CustomXMLPath   = ""
+        ProxyEnabled    = $true
+        DepotEnabled    = $false
+        ApplyProductKey = $false
+        ProductKey      = ""
+    }
+    $apercuTexteDiag = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "Apercu-Maquette.ps1"))
+    $lignesApercuDiag = @($apercuTexteDiag -split "`r?`n")
+    $lignesMoteurDiag = [System.IO.File]::ReadAllLines($EngineScript)
+    & {
+        param($Chemin, $Fenetre, $Cfg, $LignesMoteur, $LignesInterface)
+        $CONFIG_FILE = $Chemin
+        Invoke-Expression (Get-FunctionText -Lines $LignesMoteur -Name "Save-Config")
+        Invoke-Expression (Get-FunctionText -Lines $LignesMoteur -Name "Protect-SecretText")
+        Invoke-Expression (Get-FunctionText -Lines $LignesInterface -Name "Save-ConfigPoste")
+        Save-ConfigPoste $Fenetre $Cfg
+    } $cfgIso $fenetrePoste $cfgPoste $lignesMoteurDiag $lignesApercuDiag
+    $cfgEcrit = Get-Content -LiteralPath $cfgIso -Raw | ConvertFrom-Json
+    $champKmsPoste = @($cfgEcrit.PSObject.Properties | Where-Object { [string]$_.Value -eq "127.0.0.1:1699" } | Select-Object -First 1)
+    $nomChampKmsPoste = if ($champKmsPoste.Count -gt 0) { [string]$champKmsPoste[0].Name } else { "" }
     $sortieIso = ""
     $codeIso = -1
     $eapIso = $ErrorActionPreference
@@ -2228,8 +2328,9 @@ public class FakeAuthProxy
     $attenduProxy = "proxy 127.0.0.1:" + $proxyDiag.Port + " joignable ; 407 (authentification : Basic)"
     $attenduKms   = "DNS KMS : 127.0.0.1 -> 127.0.0.1 (port 1699)"
     $lectureIso = ($sortieIso -match [regex]::Escape($attenduProxy)) -and ($sortieIso -match [regex]::Escape($attenduKms)) -and
-                  (($codeIso -eq 0) -or ($codeIso -eq 1)) -and ($cfgIso.StartsWith($Work)) -and ($profilAvant -eq $profilApres)
-    Check "diagnostic : proxy et KMS lus dans une configuration isolee (profil reel intact)" $lectureIso ("code=" + $codeIso + " attendu proxy=[" + $attenduProxy + "] attendu KMS=[" + $attenduKms + "] profil " + $profilAvant + " -> " + $profilApres + " ; " + ($sortieIso -replace "\s+", " "))
+                  (($codeIso -eq 0) -or ($codeIso -eq 1)) -and ($cfgIso.StartsWith($Work)) -and ($profilAvant -eq $profilApres) -and
+                  ($nomChampKmsPoste -eq "KmsServer")
+    Check "diagnostic : proxy et KMS lus depuis la configuration ecrite par l'interface (profil reel intact)" $lectureIso ("code=" + $codeIso + " champ KMS interface=[" + $nomChampKmsPoste + "] attendu proxy=[" + $attenduProxy + "] attendu KMS=[" + $attenduKms + "] profil " + $profilAvant + " -> " + $profilApres + " ; " + ($sortieIso -replace "\s+", " "))
 
     # Deuxieme configuration isolee : le diagnostic doit suivre ProxyEnabled et le port
     # KMS du fichier, pas ceux du premier essai ni les valeurs par defaut.
@@ -2244,11 +2345,157 @@ public class FakeAuthProxy
     $eapIso2 = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        $sortieIso2 = (& $psHost -NoProfile -ExecutionPolicy Bypass -File $EngineScript -Diagnostic -ConfigFile $cfgIso 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+        $sortieIso2 = (& $psHost -NoProfile -ExecutionPolicy Bypass -File $EngineScript -Diagnostic -ConfigFile $cfgIso -SystemProxy direct 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
         $codeIso2 = $LASTEXITCODE
     } finally { $ErrorActionPreference = $eapIso2 }
     $attenduKms2 = "DNS KMS : 127.0.0.1 -> 127.0.0.1 (port 1700)"
     Check "diagnostic : configuration isolee sans proxy -> acces direct et port KMS du fichier" (($codeIso2 -eq 0 -or $codeIso2 -eq 1) -and ($sortieIso2 -match [regex]::Escape("aucun proxy dans la configuration ; acces direct")) -and ($sortieIso2 -match [regex]::Escape($attenduKms2)) -and ($sortieIso2 -notmatch [regex]::Escape("1699"))) ("code=" + $codeIso2 + " ; " + ($sortieIso2 -replace "\s+", " "))
+
+    # Proxy systeme : sans proxy dans la configuration, le diagnostic doit tester
+    # WinHTTP (machine) puis WinINet (session) et nommer celui qu'il utilise. Le
+    # proxy local est injecte par -SystemProxy : aucun reglage du poste n'est touche.
+    function Invoke-DiagOptions {
+        param([string]$Source = "", [string]$Proxy = "", [string]$ProxySource = "")
+        $arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $EngineScript, "-Diagnostic", "-ConfigFile", $cfgIso)
+        if ($Source -ne "") { $arguments += @("-TimeSource", $Source) }
+        if ($Proxy -ne "") { $arguments += @("-SystemProxy", $Proxy) }
+        if ($ProxySource -ne "") { $arguments += @("-SystemProxySource", $ProxySource) }
+        $eap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $out = (& $psHost @arguments 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+            $code = $LASTEXITCODE
+        } finally { $ErrorActionPreference = $eap }
+        return @{ Code = $code ; Out = $out }
+    }
+
+    $proxySys = New-Object FakeAuthProxy -ArgumentList @("sys", "secret")
+    $proxySys.Start()
+    $sondeUdp = [System.Net.Sockets.UdpClient]::new([System.Net.IPAddress]::Loopback, 0)
+    $portFerme = ([System.Net.IPEndPoint]$sondeUdp.Client.LocalEndPoint).Port
+    $sondeUdp.Close()
+    try {
+        $h4 = Invoke-DiagOptions -Source ("127.0.0.1:" + $portFerme) -Proxy ("127.0.0.1:" + $proxySys.Port) -ProxySource "WinHTTP"
+        $attendu4 = "proxy systeme WinHTTP 127.0.0.1:" + $proxySys.Port + " joignable ; 407 (authentification : Basic)"
+        Check "diagnostic : sans proxy d'outil, le proxy systeme WinHTTP est teste" (($h4.Code -eq 0) -and ($h4.Out -match [regex]::Escape($attendu4)) -and ($h4.Out -notmatch 'acces direct')) ("code=" + $h4.Code + " attendu=" + $attendu4 + " ; " + ($h4.Out -replace "\s+", " "))
+        $h5 = Invoke-DiagOptions -Source ("127.0.0.1:" + $portFerme) -Proxy ("127.0.0.1:" + $proxySys.Port) -ProxySource "WinINet"
+        $attendu5 = "proxy systeme WinINet 127.0.0.1:" + $proxySys.Port + " joignable ; 407 (authentification : Basic)"
+        Check "diagnostic : sans proxy d'outil, le proxy systeme WinINet est teste" (($h5.Code -eq 0) -and ($h5.Out -match [regex]::Escape($attendu5)) -and ($h5.Out -notmatch 'acces direct')) ("code=" + $h5.Code + " attendu=" + $attendu5 + " ; " + ($h5.Out -replace "\s+", " "))
+    } finally {
+        $proxySys.Stop()
+    }
+
+    # Lecture des deux formats systeme, sans toucher au registre ni a netsh : les
+    # fonctions du moteur sont jouees en portee enfant sur des sorties representatives.
+    & {
+        foreach ($fn in @("ConvertFrom-ProxyAdresse", "ConvertFrom-ProxyWinHttp", "ConvertFrom-ProxyWinInet")) {
+            Invoke-Expression (Get-FunctionText -Lines $lines -Name $fn)
+        }
+        $wh1 = ConvertFrom-ProxyWinHttp -Texte "Proxy Server(s) : 10.1.2.3:3128`r`nBypass List : <local>"
+        $wh2 = ConvertFrom-ProxyWinHttp -Texte "Direct access (no proxy server)."
+        $wh3 = ConvertFrom-ProxyWinHttp -Texte "Serveur(s) proxy : proxy.local:8080"
+        $okWh = ($null -ne $wh1) -and ($wh1.Host -eq "10.1.2.3") -and ($wh1.Port -eq 3128) -and ($null -eq $wh2) -and ($null -ne $wh3) -and ($wh3.Port -eq 8080)
+        Check "diagnostic : lecture WinHTTP d'un proxy ou d'un acces direct" $okWh ("proxy=" + $(if ($null -eq $wh1) { "(null)" } else { $wh1.Host + ":" + $wh1.Port }) + " direct=" + $(if ($null -eq $wh2) { "null" } else { "lu" }) + " fr=" + $(if ($null -eq $wh3) { "(null)" } else { $wh3.Host + ":" + $wh3.Port }))
+        $in1 = ConvertFrom-ProxyWinInet -Valeur "http=proxy.local:8080;https=proxy.local:8443"
+        $in2 = ConvertFrom-ProxyWinInet -Valeur "proxy.local:3128"
+        $in3 = ConvertFrom-ProxyWinInet -Valeur ""
+        $okIn = ($null -ne $in1) -and ($in1.Host -eq "proxy.local") -and ($in1.Port -eq 8443) -and ($null -ne $in2) -and ($in2.Port -eq 3128) -and ($null -eq $in3)
+        Check "diagnostic : lecture WinINet d'une liste http/https ou d'une adresse simple" $okIn ("https=" + $(if ($null -eq $in1) { "(null)" } else { $in1.Host + ":" + $in1.Port }) + " simple=" + $(if ($null -eq $in2) { "(null)" } else { $in2.Host + ":" + $in2.Port }))
+    }
+
+    # Horloge : un faux serveur SNTP local repond avec l'heure du poste + un decalage
+    # connu. Le diagnostic tourne en processus separe, comme un utilisateur, et ne
+    # touche ni au service W32Time ni a la configuration du poste.
+    $fakeSntpCs = @'
+using System;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading;
+
+public class FakeSntp
+{
+    private UdpClient _u;
+    private Thread _t;
+    private int _port;
+    private int _offset;
+
+    public FakeSntp(int offsetSeconds) { _offset = offsetSeconds; }
+    public int Port { get { return _port; } }
+
+    public void Start()
+    {
+        _u = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        _port = ((IPEndPoint)_u.Client.LocalEndPoint).Port;
+        _t = new Thread(Loop);
+        _t.IsBackground = true;
+        _t.Start();
+    }
+
+    public void Stop()
+    {
+        try { _u.Close(); } catch { }
+    }
+
+    private static void Put(byte[] b, int i, DateTime utc)
+    {
+        double s = (utc - new DateTime(1900, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+        uint sec = (uint)Math.Floor(s);
+        uint frac = (uint)((s - sec) * 4294967296.0);
+        b[i] = (byte)(sec >> 24); b[i + 1] = (byte)(sec >> 16); b[i + 2] = (byte)(sec >> 8); b[i + 3] = (byte)sec;
+        b[i + 4] = (byte)(frac >> 24); b[i + 5] = (byte)(frac >> 16); b[i + 6] = (byte)(frac >> 8); b[i + 7] = (byte)frac;
+    }
+
+    private void Loop()
+    {
+        while (true)
+        {
+            IPEndPoint remote = null;
+            byte[] req;
+            try { req = _u.Receive(ref remote); } catch { return; }
+            if (req == null || req.Length < 48) { continue; }
+            byte[] rep = new byte[48];
+            Array.Copy(req, rep, 48);
+            DateTime now = DateTime.UtcNow.AddSeconds(_offset);
+            rep[0] = 0x24;
+            rep[1] = 1;
+            rep[2] = 4;
+            rep[3] = 0xEC;
+            Put(rep, 16, now);
+            for (int i = 24; i < 32; i++) { rep[i] = req[i]; }
+            Put(rep, 32, now);
+            Put(rep, 40, now);
+            try { _u.Send(rep, rep.Length, remote); } catch { return; }
+        }
+    }
+}
+'@
+    if (-not ("FakeSntp" -as [type])) { Add-Type -TypeDefinition $fakeSntpCs -Language CSharp }
+
+    function Invoke-DiagHorloge {
+        param([string]$Source)
+        $eap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $out = (& $psHost -NoProfile -ExecutionPolicy Bypass -File $EngineScript -Diagnostic -ConfigFile $cfgIso -TimeSource $Source -SystemProxy direct 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+            $code = $LASTEXITCODE
+        } finally { $ErrorActionPreference = $eap }
+        return @{ Code = $code ; Out = $out }
+    }
+
+    $sntpJuste = New-Object FakeSntp -ArgumentList @(60)
+    $sntpFaux  = New-Object FakeSntp -ArgumentList @(18000)
+    try {
+        $sntpJuste.Start() ; $sntpFaux.Start()
+        $h1 = Invoke-DiagHorloge ("127.0.0.1:" + $sntpJuste.Port)
+        Check "diagnostic : ecart d'horloge de 1 min mesure et non bloquant" (($h1.Code -eq 0) -and ($h1.Out -match 'ecart mesure : \+1 min') -and ($h1.Out -match 'tolerance KMS 4 h') -and ($h1.Out -notmatch '\[BLOQUANT\]\s+Horloge')) ("code=" + $h1.Code + " ; " + ($h1.Out -replace "\s+", " "))
+        $h2 = Invoke-DiagHorloge ("127.0.0.1:" + $sntpFaux.Port)
+        Check "diagnostic : ecart d'horloge de 5 h -> BLOQUANT et code 1" (($h2.Code -eq 1) -and ($h2.Out -match '\[BLOQUANT\]\s+Horloge') -and ($h2.Out -match 'ecart mesure : \+5 h') -and ($h2.Out -match '0xC004F06C')) ("code=" + $h2.Code + " ; " + ($h2.Out -replace "\s+", " "))
+    } finally {
+        $sntpJuste.Stop() ; $sntpFaux.Stop()
+    }
+
+    $h3 = Invoke-DiagHorloge ("127.0.0.1:" + $portFerme)
+    Check "diagnostic : source de temps injoignable -> avertissement, pas de blocage" (($h3.Code -eq 0) -and ($h3.Out -match '\[ATTENTION\]\s+Horloge') -and ($h3.Out -match 'aucune source de temps joignable') -and ($h3.Out -match 'non bloquant')) ("code=" + $h3.Code + " ; " + ($h3.Out -replace "\s+", " "))
 }
 catch {
     Write-Host ("ERREUR DU HARNAIS : " + $_.Exception.Message) -ForegroundColor Red

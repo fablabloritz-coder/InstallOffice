@@ -1,5 +1,5 @@
 # Empreintes enregistrees avec les quatre captures de Maquette (Test-InstallOffice.ps1).
 # sources : les cinq XAML et Apercu-Maquette.ps1, fins de ligne normalisees.
 # rendu   : polices resolues sur le poste qui a produit les PNG.
-sources 30DE1DCA8EECE038AE3EA6781401C9B1E9098C33908C1AE0A61AD29E630CED77
+sources BA13C7ED464F17A9D4D156A58676DC647DFF6818B880D7D81C59E9C239B5DA45
 rendu F3D842C6EF757500F8F29EF53C00999008564DE0CD5721EEB1D27FEABFA588D8

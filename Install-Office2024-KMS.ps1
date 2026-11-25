@@ -32,7 +32,7 @@
 # ================================================================
 
 # Mode lecture seule : verifie le poste et rend un rapport, sans rien installer.
-param([switch]$Diagnostic, [string]$ConfigFile = "")
+param([switch]$Diagnostic, [string]$ConfigFile = "", [string]$TimeSource = "", [string]$SystemProxy = "", [string]$SystemProxySource = "")
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -69,6 +69,8 @@ $PROXY_BYPASS_DEF   = '<local>;*.local'
 $KMS_SERVEUR        = "KMS.VOTRE-SERVEUR.FR"   # accepte aussi "host:port"
 $KMS_PORT           = "1688"
 $DISK_MIN_GB        = 4
+# Ecart maximal client/hote KMS : au-dela de 4 h, KMS refuse l'horodatage (0xC004F06C).
+$KMS_TOLERANCE_MIN  = 240
 $LOG_FOLDER         = "C:\InstallOffice2024"
 # -ConfigFile relit une configuration donnee au lieu de celle du profil : c'est ce qui
 # permet de prouver le mode -Diagnostic sur une configuration de test isolee.
@@ -1081,10 +1083,147 @@ function Get-Config {
 #  MODE DIAGNOSTIC (-Diagnostic) : lecture seule, rien n'est installe
 # ================================================================
 #  Meme lecture du poste que le pre-vol de l'interface (Get-PreChecks), plus le
-#  proxy configure, le DNS du KMS et l'horloge. Aucune ecriture, aucune elevation :
-#  lance sans droits administrateur, il dit justement si la session les a.
+#  proxy configure (sinon celui de WinHTTP/WinINet), le DNS du KMS et l'horloge.
+#  L'ecart d'horloge est mesure par
+#  SNTP : au-dela de 4 h, KMS refuse l'activation ; une source injoignable n'est
+#  qu'un avertissement. Aucune ecriture, aucune elevation : lance sans droits
+#  administrateur, il dit justement si la session les a.
+# --- Mesure SNTP de l'ecart d'horloge (lecture seule) ----------------------
+#  Un paquet NTP de 48 octets suffit : aucun module, aucun droit, aucune ecriture.
+#  La tolerance appliquee est celle de KMS (4 h, documentee par Microsoft) ; une
+#  source muette ne bloque pas, elle prive seulement la mesure.
+function ConvertFrom-NtpPaquet {
+    param([byte[]]$Paquet, [int]$Offset)
+    $sec = ([uint64]$Paquet[$Offset] -shl 24) -bor ([uint64]$Paquet[$Offset + 1] -shl 16) -bor ([uint64]$Paquet[$Offset + 2] -shl 8) -bor [uint64]$Paquet[$Offset + 3]
+    $frac = ([uint64]$Paquet[$Offset + 4] -shl 24) -bor ([uint64]$Paquet[$Offset + 5] -shl 16) -bor ([uint64]$Paquet[$Offset + 6] -shl 8) -bor [uint64]$Paquet[$Offset + 7]
+    # Epoque NTP = 1900 ; on repart de 1970 (epoque Unix) pour retirer les
+    # 2 208 988 800 secondes une seule fois.
+    $base = [datetime]::new(1970, 1, 1, 0, 0, 0, [System.DateTimeKind]::Utc)
+    return $base.AddSeconds(([double]$sec - 2208988800) + ([double]$frac / 4294967296))
+}
+
+function Format-EcartHorloge {
+    param([double]$Secondes)
+    $signe = if ($Secondes -lt 0) { "-" } else { "+" }
+    $s = [math]::Abs($Secondes)
+    if ($s -ge 3600) { return ($signe + [math]::Round($s / 3600, 1) + " h") }
+    if ($s -ge 60) { return ($signe + [math]::Round($s / 60, 1) + " min") }
+    return ($signe + [math]::Round($s, 1) + " s")
+}
+
+function Get-SntpEcart {
+    param([string]$Source, [int]$TimeoutMs = 1500)
+    $res = @{ OK = $false ; OffsetSeconds = $null ; Source = $Source ; Detail = "" }
+    $hote = $Source ; $port = 123
+    if ($Source -match '^(?<h>.+):(?<p>\d+)$') { $hote = $Matches.h ; $port = [int]$Matches.p }
+    $udp = $null
+    try {
+        $tache = [System.Net.Dns]::GetHostAddressesAsync($hote)
+        if (-not $tache.Wait($TimeoutMs)) { throw ("resolution DNS trop lente pour " + $hote) }
+        $ips = @($tache.Result | Where-Object { $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork })
+        if ($ips.Count -eq 0) { throw ("aucune adresse IPv4 pour " + $hote) }
+        $udp = New-Object System.Net.Sockets.UdpClient
+        $udp.Client.ReceiveTimeout = $TimeoutMs
+        $udp.Connect([System.Net.IPEndPoint]::new($ips[0], $port))
+        $paquet = New-Object byte[] 48
+        $paquet[0] = 0x1B
+        $t1 = [DateTime]::UtcNow
+        [void]$udp.Send($paquet, $paquet.Length)
+        $remote = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
+        $rep = $udp.Receive([ref]$remote)
+        $t4 = [DateTime]::UtcNow
+        if ($rep.Length -lt 48) { throw "reponse SNTP trop courte" }
+        $mode = [int]($rep[0] -band 0x7)
+        $stratum = [int]$rep[1]
+        if ($mode -ne 4) { throw ("mode SNTP inattendu : " + $mode) }
+        if ($stratum -eq 0) { throw "source SNTP sans reference (stratum 0)" }
+        $t2 = ConvertFrom-NtpPaquet -Paquet $rep -Offset 32
+        $t3 = ConvertFrom-NtpPaquet -Paquet $rep -Offset 40
+        if ($t3.Year -lt 2000) { throw "horodatage SNTP invalide" }
+        $ecart = (((($t2 - $t1).TotalSeconds) + (($t3 - $t4).TotalSeconds)) / 2)
+        $res.OK = $true
+        $res.OffsetSeconds = [math]::Round($ecart, 1)
+        $res.Detail = ("ecart mesure : " + (Format-EcartHorloge $res.OffsetSeconds))
+    } catch {
+        $res.Detail = $_.Exception.Message
+    } finally {
+        if ($null -ne $udp) { try { $udp.Close() } catch {} }
+    }
+    return $res
+}
+
+# --- Proxy systeme (lecture seule) -----------------------------------------
+#  WinHTTP (machine) est la couche du service Click-to-Run ; WinINet (session)
+#  couvre les applications de l'utilisateur. Ces fonctions ne modifient rien.
+function ConvertFrom-ProxyAdresse {
+    param([string]$Valeur)
+    if ([string]::IsNullOrWhiteSpace($Valeur)) { return $null }
+    $m = [regex]::Match(([string]$Valeur).Trim(), '^(?<h>\[[0-9A-Fa-f:]+\]|[A-Za-z0-9][A-Za-z0-9.-]*)\s*:\s*(?<p>\d{1,5})$')
+    if (-not $m.Success) { return $null }
+    $p = [int]$m.Groups['p'].Value
+    if ($p -lt 1 -or $p -gt 65535) { return $null }
+    return @{ Host = $m.Groups['h'].Value ; Port = $p }
+}
+
+function ConvertFrom-ProxyWinHttp {
+    param([string]$Texte)
+    if ([string]::IsNullOrWhiteSpace($Texte)) { return $null }
+    # netsh affiche "Proxy Server(s) : hote:port" ou "Serveur(s) proxy" ; une
+    # liste de contournement ne porte pas de port, elle ne peut pas etre confondue.
+    $m = [regex]::Match([string]$Texte, '(?<![0-9A-Za-z.-])(?<h>\[[0-9A-Fa-f:]+\]|[A-Za-z0-9][A-Za-z0-9.-]*)\s*:\s*(?<p>\d{1,5})(?![0-9])')
+    if (-not $m.Success) { return $null }
+    return (ConvertFrom-ProxyAdresse -Valeur ($m.Groups['h'].Value + ":" + $m.Groups['p'].Value))
+}
+
+function ConvertFrom-ProxyWinInet {
+    param([string]$Valeur)
+    if ([string]::IsNullOrWhiteSpace($Valeur)) { return $null }
+    # ProxyServer peut etre "hote:port" ou "http=...;https=..." : pour un CONNECT
+    # vers 443, l'entree https est celle que WinINet utiliserait.
+    $https = @() ; $http = @() ; $simples = @()
+    foreach ($partie in (([string]$Valeur) -split ';')) {
+        $p = $partie.Trim()
+        if ($p -match '^(?i)https\s*=\s*(.+)$') { $https += $Matches[1].Trim() }
+        elseif ($p -match '^(?i)http\s*=\s*(.+)$') { $http += $Matches[1].Trim() }
+        elseif ($p -ne '' -and $p -notmatch '=') { $simples += $p }
+    }
+    foreach ($cand in @($https + $http + $simples)) {
+        $a = ConvertFrom-ProxyAdresse -Valeur $cand
+        if ($null -ne $a) { return $a }
+    }
+    return $null
+}
+
+function Get-ProxySysteme {
+    $erreurs = @()
+    try {
+        $sortie = @(& netsh winhttp show proxy 2>$null)
+        $code = $LASTEXITCODE
+        if ($code -ne 0) { $erreurs += ("netsh winhttp show proxy a echoue (code " + $code + ")") }
+        $proxy = ConvertFrom-ProxyWinHttp -Texte (($sortie -join "`n"))
+        if ($null -ne $proxy) {
+            return @{ Configured = $true ; Host = $proxy.Host ; Port = $proxy.Port ; Source = "WinHTTP (machine)" ; Erreur = "" }
+        }
+    } catch {
+        $erreurs += ("WinHTTP illisible : " + $_.Exception.Message)
+    }
+    try {
+        $inet = Get-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction Stop
+        if ([int]$inet.ProxyEnable -eq 1) {
+            $proxy = ConvertFrom-ProxyWinInet -Valeur ([string]$inet.ProxyServer)
+            if ($null -ne $proxy) {
+                return @{ Configured = $true ; Host = $proxy.Host ; Port = $proxy.Port ; Source = "WinINet (session)" ; Erreur = "" }
+            }
+            $erreurs += ("WinINet (session) : proxy active mais adresse illisible (" + [string]$inet.ProxyServer + ")")
+        }
+    } catch {
+        $erreurs += ("WinINet illisible : " + $_.Exception.Message)
+    }
+    return @{ Configured = $false ; Host = "" ; Port = 0 ; Source = "" ; Erreur = ($erreurs -join " ; ") }
+}
+
 function Get-Diagnostic {
-    param([string]$SetupPath = $DEFAULT_SETUP_PATH)
+    param([string]$SetupPath = $DEFAULT_SETUP_PATH, [string]$TimeSource = "", [string]$SystemProxy = "", [string]$SystemProxySource = "")
     $pc  = Get-PreChecks -SetupPath $SetupPath
     $cfg = Get-Config
     $items = New-Object System.Collections.ArrayList
@@ -1108,24 +1247,52 @@ function Get-Diagnostic {
     else { $etat = "ATTENTION" ; $detail = "session standard : l'installation demandera une elevation UAC" }
     [void]$items.Add(@{ Nom = "Droits administrateur" ; Etat = $etat ; Detail = $detail })
 
-    # 4. Proxy joignable (celui de la configuration, sinon acces direct)
-    $hoteProxy = "" ; $portProxy = 0
+    # 4. Proxy joignable : celui de la configuration, sinon celui que WinHTTP ou
+    #    WinINet impose au poste. On teste celui qui sera reellement utilise.
+    $hoteProxy = "" ; $portProxy = 0 ; $origineProxy = ""
     if ($null -ne $cfg -and $cfg.ProxyEnabled -and -not [string]::IsNullOrWhiteSpace([string]$cfg.ProxyHost)) {
         $hoteProxy = [string]$cfg.ProxyHost
         [void][int]::TryParse([string]$cfg.ProxyPort, [ref]$portProxy)
         if ($portProxy -le 0) { $portProxy = 8080 }
     }
+    $systemeIllisible = ""
+    if ($hoteProxy -eq "") {
+        if ($SystemProxy -match '^(?i)(direct|aucun|none)$') {
+            # -SystemProxy direct : force l'absence de proxy (test isole).
+        } elseif (-not [string]::IsNullOrWhiteSpace($SystemProxy)) {
+            $adresse = ConvertFrom-ProxyAdresse -Valeur $SystemProxy.Trim()
+            if ($null -ne $adresse) {
+                $hoteProxy = $adresse.Host ; $portProxy = $adresse.Port
+                $libelle = if (-not [string]::IsNullOrWhiteSpace($SystemProxySource)) { $SystemProxySource.Trim() } else { "systeme" }
+                if ($libelle -notmatch '^(?i)systeme') { $libelle = "systeme " + $libelle }
+                $origineProxy = $libelle
+            } else {
+                $systemeIllisible = ("proxy systeme force illisible : " + $SystemProxy)
+            }
+        } else {
+            $sys = Get-ProxySysteme
+            if ($sys.Configured) {
+                $hoteProxy = $sys.Host ; $portProxy = $sys.Port ; $origineProxy = "systeme " + $sys.Source
+            } elseif ($sys.Erreur -ne "") {
+                $systemeIllisible = $sys.Erreur
+            }
+        }
+    }
+    $prefixeProxy = "proxy " + $hoteProxy + ":" + $portProxy
+    if ($origineProxy -ne "") { $prefixeProxy = "proxy " + $origineProxy + " " + $hoteProxy + ":" + $portProxy }
     if ($hoteProxy -ne "") {
         if (-not (Test-TcpPort -Server $hoteProxy -Port $portProxy -TimeoutMs 3000)) {
-            $etat = "ATTENTION" ; $detail = ("proxy " + $hoteProxy + ":" + $portProxy + " injoignable (port ferme ou filtre)")
+            $etat = "ATTENTION" ; $detail = ($prefixeProxy + " injoignable (port ferme ou filtre)")
         } else {
             $c = Test-ProxyConnect -ProxyHost $hoteProxy -ProxyPort $portProxy -TargetHost "officecdn.microsoft.com" -TargetPort 443 -TimeoutMs 4000
-            if ($c.OK) { $etat = "OK" ; $detail = ("proxy " + $hoteProxy + ":" + $portProxy + " joignable ; CONNECT officecdn.microsoft.com:443 accepte") }
-            elseif ($c.Code -eq 407) { $etat = "ATTENTION" ; $detail = ("proxy " + $hoteProxy + ":" + $portProxy + " joignable ; 407 (authentification : " + $c.Schemes + ")") }
-            else { $etat = "ATTENTION" ; $detail = ("proxy joignable ; CONNECT refuse : " + $c.Detail) }
+            if ($c.OK) { $etat = "OK" ; $detail = ($prefixeProxy + " joignable ; CONNECT officecdn.microsoft.com:443 accepte") }
+            elseif ($c.Code -eq 407) { $etat = "ATTENTION" ; $detail = ($prefixeProxy + " joignable ; 407 (authentification : " + $c.Schemes + ")") }
+            else { $etat = "ATTENTION" ; $detail = ($prefixeProxy + " joignable ; CONNECT refuse : " + $c.Detail) }
         }
+    } elseif ($systemeIllisible -ne "") {
+        $etat = "ATTENTION" ; $detail = ("configuration sans proxy, mais " + $systemeIllisible + " ; acces direct non prouve")
     } else {
-        $etat = "OK" ; $detail = "aucun proxy dans la configuration ; acces direct"
+        $etat = "OK" ; $detail = "aucun proxy dans la configuration ; acces direct (verifie aussi dans WinHTTP et WinINet)"
     }
     [void]$items.Add(@{ Nom = "Proxy joignable" ; Etat = $etat ; Detail = $detail })
 
@@ -1153,7 +1320,8 @@ function Get-Diagnostic {
     }
     [void]$items.Add(@{ Nom = "DNS KMS" ; Etat = $etat ; Detail = $detail })
 
-    # 6. Horloge
+    # 6. Horloge : un ecart reel au-dela de la tolerance KMS est bloquant ; une source
+    #    injoignable n'est qu'un avertissement (le service peut tourner sans preuve).
     $svc = Get-Service w32time -ErrorAction SilentlyContinue
     $source = ""
     try {
@@ -1164,18 +1332,54 @@ function Get-Diagnostic {
     $maintenant = Get-Date
     $fuseau = [System.TimeZoneInfo]::Local
     $detail = ($maintenant.ToString("dd/MM/yyyy HH:mm") + " (" + $fuseau.Id + ")")
-    if ($source -ne "") { $detail += (" ; source : " + $source) }
+    if ($source -ne "") { $detail += (" ; source Windows : " + $source) }
     if ($null -ne $svc) { $detail += (" ; service W32Time : " + $svc.Status) } else { $detail += " ; service W32Time absent" }
-    if ($null -ne $svc -and $svc.Status -eq "Running" -and $maintenant.Year -ge 2024) { $etat = "OK" }
-    else { $etat = "ATTENTION" }
+
+    # Source mesuree : -TimeSource l'impose (test ou source interne) ; sinon la source
+    # Windows, puis time.windows.com si celle-ci est une horloge locale ou echoue.
+    $candidats = New-Object System.Collections.ArrayList
+    if (-not [string]::IsNullOrWhiteSpace($TimeSource)) {
+        [void]$candidats.Add($TimeSource.Trim())
+    } else {
+        $src = $source
+        if ($src -match ',\s*0x[0-9a-fA-F]+$') { $src = ($src -replace ',\s*0x[0-9a-fA-F]+$', '').Trim() }
+        if ($src -match '(?i)CMOS|Free-running|VM IC|non synchron|not synchronized|unspecified') { $src = "" }
+        if ([string]::IsNullOrWhiteSpace($src)) { $src = "time.windows.com" }
+        [void]$candidats.Add($src)
+        if ($src -ne "time.windows.com") { [void]$candidats.Add("time.windows.com") }
+    }
+    $mesure = $null ; $tentatives = @()
+    foreach ($cand in $candidats) {
+        $m = Get-SntpEcart -Source $cand
+        if ($m.OK) { $mesure = $m ; break }
+        $tentatives += ($cand + " : " + $m.Detail)
+    }
+    if ($null -eq $mesure) {
+        $mesure = @{ OK = $false ; OffsetSeconds = $null ; Source = ($candidats -join ", ") ; Detail = ($tentatives -join " ; ") }
+    }
+
+    if ($mesure.OK) {
+        $detail += (" ; ecart mesure : " + (Format-EcartHorloge $mesure.OffsetSeconds) + " par rapport a " + $mesure.Source + " ; tolerance KMS " + [int]($KMS_TOLERANCE_MIN / 60) + " h")
+        if ([math]::Abs([double]$mesure.OffsetSeconds) -gt ($KMS_TOLERANCE_MIN * 60)) {
+            $etat = "BLOQUANT"
+            $detail += " ; au-dela de la tolerance : l'activation KMS sera refusee (0xC004F06C)"
+        } elseif ($null -ne $svc -and $svc.Status -eq "Running") {
+            $etat = "OK"
+        } else {
+            $etat = "ATTENTION"
+        }
+    } else {
+        $etat = "ATTENTION"
+        $detail += (" ; aucune source de temps joignable (" + $mesure.Detail + ") ; ecart non mesure, non bloquant")
+    }
     [void]$items.Add(@{ Nom = "Horloge" ; Etat = $etat ; Detail = $detail })
 
     return @{ Items = $items ; Bloquants = @($items | Where-Object { $_.Etat -eq "BLOQUANT" }).Count ; Attentions = @($items | Where-Object { $_.Etat -eq "ATTENTION" }).Count }
 }
 
 function Show-Diagnostic {
-    param([string]$SetupPath = $DEFAULT_SETUP_PATH)
-    $d = Get-Diagnostic -SetupPath $SetupPath
+    param([string]$SetupPath = $DEFAULT_SETUP_PATH, [string]$TimeSource = "", [string]$SystemProxy = "", [string]$SystemProxySource = "")
+    $d = Get-Diagnostic -SetupPath $SetupPath -TimeSource $TimeSource -SystemProxy $SystemProxy -SystemProxySource $SystemProxySource
     [Console]::WriteLine("")
     [Console]::WriteLine("=== Diagnostic InstallOffice - " + $env:COMPUTERNAME + " - " + (Get-Date).ToString("dd/MM/yyyy HH:mm") + " ===")
     [Console]::WriteLine("Aucune installation, aucun reglage modifie.")
@@ -1195,7 +1399,7 @@ function Show-Diagnostic {
 }
 
 if ($Diagnostic) {
-    $codeDiag = Show-Diagnostic
+    $codeDiag = Show-Diagnostic -TimeSource $TimeSource -SystemProxy $SystemProxy -SystemProxySource $SystemProxySource
     exit $codeDiag
 }
 
