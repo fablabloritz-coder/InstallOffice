@@ -117,7 +117,7 @@ $script:disqueMinGo = 4
 # le README, la suite et Compare-ExeRecompilation la repetent pour l'affichage et le
 # controle : la suite exige qu'elles soient toutes egales, pour qu'un bump oublie
 # quelque part se voie avant la livraison.
-$script:versionOutil = "8.5.1.0"
+$script:versionOutil = "8.5.2.0"
 
 $APPS = @(
     @{ Nom = "Word" ; Cle = "AppWord" ; Libelle = "Word" }

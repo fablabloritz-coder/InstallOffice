@@ -33,7 +33,7 @@ jobs:
 
       # Le tag porte la version annoncee au poste : version.txt, l'EXE et le README
       # sont deja controles ensemble sur main. Ici, on refuse un tag qui ne colle pas
-      # a version.txt (v8.5.1 correspond a 8.5.1.0), avant de construire quoi que ce soit.
+      # a version.txt (v8.5.2 correspond a 8.5.2.0), avant de construire quoi que ce soit.
       # Un lancement manuel n'a pas de tag : la repetition saute ce controle.
       - name: Verifier que le tag correspond a version.txt
         if: github.event_name == 'push'

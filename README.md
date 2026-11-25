@@ -302,7 +302,7 @@ Invoke-PS2EXE -InputFile "Apercu-Maquette.ps1" `
               -Product "InstallOffice" `
               -Description "Installation Office LTSC 2024 et activation KMS" `
               -Company "Lycee Loritz" `
-              -Version "8.5.1.0"
+              -Version "8.5.2.0"
 ```
 
 (`Install-Module ps2exe` si le module est absent.)
@@ -371,7 +371,7 @@ conforme.
 Empreinte du binaire livré, publiée ici pour être comparée sans git :
 
 ```
-SHA256 Install-Office2024-KMS.exe = FE653BA0BA075C9F285BB88120D3811FA9536C5E2CF167AE37FAD4780698862B
+SHA256 Install-Office2024-KMS.exe = 0B18A3826426356832521BE390DCE198F78E2990B08175B032145C3CFF4AE190
 ```
 
 La suite compare cette ligne au fichier livré : une recompilation sans mise à jour du
@@ -381,7 +381,7 @@ README fait échouer le contrôle, et `SHA256SUMS` la reprend dans le ZIP.
 
 Pousser un tag `v*` déclenche `.github/workflows/publication-livraison.yml` :
 
-1. le tag doit correspondre à `version.txt` (`v8.5.1` pour `8.5.1.0`), sinon le job
+1. le tag doit correspondre à `version.txt` (`v8.5.2` pour `8.5.2.0`), sinon le job
    s'arrête avant de construire quoi que ce soit ;
 2. avant toute construction, `Test-InstallOffice.ps1 -Fast` vérifie que l'EXE du tag
    embarque bien le script tagué (empreinte et version), puis le workflow compare
@@ -466,7 +466,7 @@ message **RECOMPILER** (section « Compilation de l'EXE »). Si le binaire n'exp
 script en clair (format compressé ou construction différente), l'échec dit que l'empreinte
 n'est **pas vérifiable** — sans conseil de recompilation, qui serait alors trompeur.
 
-Les autres propriétés du binaire livré sont contrôlées aussi : version `8.5.1.0`, titre
+Les autres propriétés du binaire livré sont contrôlées aussi : version `8.5.2.0`, titre
 `Deploiement Office 2024`, produit `InstallOffice`, société `Lycee Loritz` et manifeste
 `requireAdministrator`, plus `OriginalFilename` et `InternalName`, qui doivent porter le nom
 du fichier livré. Chaque écart nomme la valeur trouvée, celle attendue et l'option
