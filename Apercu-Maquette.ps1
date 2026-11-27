@@ -80,8 +80,14 @@ if ($heureJournal -ne "") {
     }
 }
 $script:journalLignes = 0
+# Journal hors panneau : chaque ligne y est gardee avant tout affichage, pour que
+# l'export d'un demarrage en echec ne soit jamais un fichier vide.
+$script:journalTexte = New-Object System.Collections.Generic.List[string]
 
 Add-Type -AssemblyName PresentationFramework
+# PresentationCore porte System.Windows.Media.FontFamily : sans lui, la creation d'une
+# police rend $null et l'affectation a FontFamily leve ensuite (journal muet au demarrage).
+Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName System.Windows.Forms
 
 # EXE compile (PS2EXE) : $MyInvocation.MyCommand.Path peut etre nul, et Split-Path
@@ -102,8 +108,32 @@ function Get-DossierScript {
 $ici = Get-DossierScript -Chemin ([string]$MyInvocation.MyCommand.Path)
 $dossier  = Join-Path $ici "Maquette"
 $pinceaux = New-Object System.Windows.Media.BrushConverter
-$policeTexte = New-Object System.Windows.Media.FontFamily("Segoe UI Variable Text, Segoe UI")
-$policeIcone = New-Object System.Windows.Media.FontFamily("Segoe MDL2 Assets, Segoe UI")
+
+# Une police qui n'a pas pu etre creee rendait $null : l'affectation a la propriete
+# FontFamily levait alors "Exception lors de la definition de FontFamily" a chaque ligne
+# du journal, qui restait vide. Ces deux fonctions rendent toujours une police de repli
+# et n'affectent jamais $null.
+function New-PoliceSure {
+    param([string]$Noms)
+    foreach ($essai in @($Noms, "Segoe UI", "Tahoma")) {
+        if ([string]::IsNullOrWhiteSpace($essai)) { continue }
+        try {
+            $police = New-Object System.Windows.Media.FontFamily($essai)
+            if ($police -is [System.Windows.Media.FontFamily]) { return $police }
+        } catch { }
+    }
+    return $null
+}
+
+function Set-Police {
+    # Une police nulle laisse celle de la fenetre : jamais d'affectation qui leve.
+    param($Controle, $Police)
+    if (($null -ne $Controle) -and ($null -ne $Police)) { $Controle.FontFamily = $Police }
+}
+
+$policeTexte = New-PoliceSure "Segoe UI Variable Text, Segoe UI"
+$policeIcone = New-PoliceSure "Segoe MDL2 Assets, Segoe UI"
+$policeJournal = New-PoliceSure "Cascadia Mono, Consolas"
 
 # Exclusions par defaut : celles qu'annonce deja l'ecran (Teams, OneDrive, Skype).
 # Ce sont les identifiants ODT, ceux que le moteur ecrit dans le XML.
@@ -117,7 +147,7 @@ $script:disqueMinGo = 4
 # le README, la suite et Compare-ExeRecompilation la repetent pour l'affichage et le
 # controle : la suite exige qu'elles soient toutes egales, pour qu'un bump oublie
 # quelque part se voie avant la livraison.
-$script:versionOutil = "8.5.2.0"
+$script:versionOutil = "8.5.3.0"
 
 $APPS = @(
     @{ Nom = "Word" ; Cle = "AppWord" ; Libelle = "Word" }
@@ -477,7 +507,12 @@ function Import-ConfigPoste {
 function Get-JournalTexte {
     param($Fenetre)
     $lignes = @()
-    foreach ($l in $Fenetre.FindName("Journal").Children) { if ($null -ne $l) { $lignes += [string]$l.Text } }
+    if ($null -ne $Fenetre) {
+        $panneau = $Fenetre.FindName("Journal")
+        if ($null -ne $panneau) { foreach ($l in $panneau.Children) { if ($null -ne $l) { $lignes += [string]$l.Text } } }
+    }
+    # Panneau absent ou vide : le tampon garde ce qui a ete journalise.
+    if ($lignes.Count -eq 0) { $lignes = @($script:journalTexte) }
     return ($lignes -join "`r`n")
 }
 
@@ -1237,12 +1272,13 @@ function Set-PointsEtape {
         $bout = ([string]$p).Split("|", 2)
         if ($bout.Count -lt 2) { throw "Point de controle illisible : '$p' (attendu etat|texte)." }
         $e = $etatsPreVol[$bout[0]]
+        if ($null -eq $e) { $bout[0] = "attente" ; $e = $etatsPreVol["attente"] }
         $bloc = New-Object System.Windows.Controls.StackPanel
         $bloc.Orientation = "Horizontal"
         $bloc.Margin = New-Object System.Windows.Thickness(0, 0, 14, 0)
         $icone = New-Object System.Windows.Controls.TextBlock
         $icone.Text = $e.Glyphe
-        $icone.FontFamily = $policeIcone
+        Set-Police $icone $policeIcone
         $icone.FontSize = 11
         $icone.Foreground = Get-Pinceau $e.Couleur
         $icone.VerticalAlignment = "Center"
@@ -1261,16 +1297,22 @@ function Set-PointsEtape {
 function Set-Etape {
     param($Fenetre, [int]$Index, [string]$Etat)
     $e = $renduEtapes[$Etat]
+    # Un etat qu'une autre version du worker nomme autrement tombait sur $null :
+    # l'affichage levait a chaque battement. Attente est le rendu sur.
+    if ($null -eq $e) { $Etat = "attente" ; $e = $renduEtapes[$Etat] }
     $puce   = $Fenetre.FindName("Etape$Index")
     $glyphe = $Fenetre.FindName("Glyphe$Index")
     $titre  = $Fenetre.FindName("Titre$Index")
     $info   = $Fenetre.FindName("Etat$Index")
+    if (($null -eq $puce) -or ($null -eq $glyphe) -or ($null -eq $titre) -or ($null -eq $info)) {
+        throw ("Etape " + $Index + " : un controle manque dans Principal.xaml (Etape, Glyphe, Titre ou Etat" + $Index + ").")
+    }
     $puce.Background = Get-Pinceau $e.Fond
     $glyphe.Foreground = Get-Pinceau $e.Texte
     if ($Etat -eq "encours") {
         # Anneau de chargement dans la puce : le glyphe tourne pendant l'etape.
         $glyphe.Text = [string][char]0xE895
-        $glyphe.FontFamily = $policeIcone
+        Set-Police $glyphe $policeIcone
         $glyphe.FontWeight = "Normal"
         $glyphe.FontSize = 12
         $glyphe.RenderTransformOrigin = New-Object System.Windows.Point(0.5, 0.5)
@@ -1278,12 +1320,12 @@ function Set-Etape {
         $script:etapeEncours = $Index
     } elseif ($Etat -eq "attente") {
         $glyphe.Text = [string]$Index
-        $glyphe.FontFamily = $policeTexte
+        Set-Police $glyphe $policeTexte
         $glyphe.FontWeight = "SemiBold"
         $glyphe.FontSize = 12
     } else {
         $glyphe.Text = $glyphes[$Etat]
-        $glyphe.FontFamily = $policeIcone
+        Set-Police $glyphe $policeIcone
         $glyphe.FontWeight = "Normal"
         $glyphe.FontSize = 11
     }
@@ -1301,6 +1343,9 @@ function Set-Etape {
 }
 
 function Add-Journal {
+    # Le journal est la seule trace lisible quand un demarrage echoue : une ligne ne doit
+    # jamais s'arreter sur un controle absent, et elle est gardee dans le tampon que
+    # l'export relit, pour qu'un nom de XAML change ne rende pas un journal vide.
     param($Fenetre, [string]$Niveau, [string]$Texte)
     $couleur = switch ($Niveau) {
         "ok"    { "#0F7B0F" }
@@ -1311,7 +1356,7 @@ function Add-Journal {
     }
     $ligne = New-Object System.Windows.Controls.TextBlock
     $ligne.FontSize = 12
-    $ligne.FontFamily = New-Object System.Windows.Media.FontFamily("Cascadia Mono, Consolas")
+    Set-Police $ligne $policeJournal
     $ligne.Foreground = Get-Pinceau $couleur
     $ligne.Margin = New-Object System.Windows.Thickness(0, 1, 0, 1)
     $horodatage = Get-Date
@@ -1321,8 +1366,13 @@ function Add-Journal {
     }
     $heure = $horodatage.ToString("HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
     $ligne.Text = ("{0}  {1}" -f $heure, $Texte)
-    [void]$Fenetre.FindName("Journal").Children.Add($ligne)
-    $Fenetre.FindName("Defilement").ScrollToEnd()
+    $script:journalTexte.Add([string]$ligne.Text)
+    if ($null -eq $Fenetre) { return }
+    $panneau = $Fenetre.FindName("Journal")
+    if ($null -eq $panneau) { return }
+    [void]$panneau.Children.Add($ligne)
+    $defilement = $Fenetre.FindName("Defilement")
+    if ($null -ne $defilement) { $defilement.ScrollToEnd() }
 }
 
 function Set-Actif {
@@ -1945,6 +1995,7 @@ $win.FindName("BtnFermer").Add_Click({ $win.Close() })
 $win.FindName("BtnReduire").Add_Click({ $win.WindowState = "Minimized" })
 $win.FindName("BtnEffacer").Add_Click({
     $win.FindName("Journal").Children.Clear()
+    $script:journalTexte.Clear()
     Add-Journal $win "info" "Journal efface."
 })
 $win.FindName("BtnRafraichir").Add_Click({ $null = Update-PreVol $win })
@@ -1968,13 +2019,15 @@ Register-ChampCle $win
 
 # Reglages du poste, puis mesures : l'ecran ne montre que ce qui a ete constate sur
 # les valeurs qui partiront reellement.
-Import-ConfigPoste $win
-# La table du pre-vol est rendue a l'appelant : au demarrage elle n'a pas de destinataire,
-# donc $null, sinon PowerShell l'imprime dans la console du script.
-$null = Update-PreVol $win
-# Reliquat d'un deploiement interrompu, cherche sur le seul port que ce programme a
-# enregistre : un autre proxy local n'est jamais touche.
-Show-ReliquatMesure $win
+# Un demarrage qui echoue doit laisser une ligne au journal, pas une fenetre muette :
+# chaque etape est bornee, et le detail part au journal.
+foreach ($etapeDemarrage in @(
+        @{ Nom = "reglages du poste" ; Action = { param($f) Import-ConfigPoste $f } },
+        @{ Nom = "pre-vol" ; Action = { param($f) $null = Update-PreVol $f } },
+        @{ Nom = "reliquat de proxy" ; Action = { param($f) Show-ReliquatMesure $f } })) {
+    try { & $etapeDemarrage.Action $win }
+    catch { Add-Journal $win "err" ("Demarrage, " + $etapeDemarrage.Nom + " : " + $_.Exception.Message) }
+}
 
 # Parcourir : vraies boites de dialogue systeme, aucune ecriture.
 $win.FindName("BtnSetup").Add_Click({

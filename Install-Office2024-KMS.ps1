@@ -77,6 +77,9 @@ function Get-DossierTravail {
     $base = $env:ProgramData
     if ([string]::IsNullOrWhiteSpace($base)) { $base = $env:LOCALAPPDATA }
     if ([string]::IsNullOrWhiteSpace($base)) { $base = [System.IO.Path]::GetTempPath() }
+    # Dernier recours : la fonction ne rend jamais vide, sinon les Join-Path qui suivent
+    # leveraient sur le parametre Path.
+    if ([string]::IsNullOrWhiteSpace($base)) { $base = "." }
     return (Join-Path $base "Office2024Deploy")
 }
 $LOG_FOLDER         = Get-DossierTravail
@@ -313,7 +316,15 @@ function Get-RelayMarkerPath {
     param([string]$Path)
     if (-not [string]::IsNullOrWhiteSpace($Path)) { return $Path }
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")
-    $dir = if ($isAdmin) { $LOG_FOLDER } else { Join-Path $env:LOCALAPPDATA "Office2024Deploy" }
+    $dir = ""
+    if ($isAdmin) {
+        $dir = $LOG_FOLDER
+    } elseif (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $dir = Join-Path $env:LOCALAPPDATA "Office2024Deploy"
+    }
+    # Un dossier vide ne doit jamais atteindre Join-Path : c'est le parametre Path nul
+    # qui s'affichait au demarrage.
+    if ([string]::IsNullOrWhiteSpace($dir)) { $dir = Get-DossierTravail }
     Join-Path $dir "relay-port.txt"
 }
 
@@ -330,6 +341,7 @@ function Save-RelayPort {
 function Get-RelayPort {
     param([string]$Path)
     $f = Get-RelayMarkerPath -Path $Path
+    if ([string]::IsNullOrWhiteSpace($f)) { return 0 }
     if (-not (Test-Path -LiteralPath $f)) { return 0 }
     $t = ""
     try { $t = ([string](Get-Content -LiteralPath $f -Raw)).Trim() } catch { return 0 }
@@ -340,7 +352,10 @@ function Get-RelayPort {
 
 function Clear-RelayPort {
     param([string]$Path)
-    try { Remove-Item -LiteralPath (Get-RelayMarkerPath -Path $Path) -Force -ErrorAction SilentlyContinue } catch {}
+    try {
+        $f = Get-RelayMarkerPath -Path $Path
+        if (-not [string]::IsNullOrWhiteSpace($f)) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+    } catch {}
 }
 
 function Get-ProxyRelaySink {
@@ -1081,6 +1096,7 @@ function Get-PreChecks {
 
 # --- Config persistante ---
 function Get-Config {
+    if ([string]::IsNullOrWhiteSpace($CONFIG_FILE)) { return $null }
     if (Test-Path $CONFIG_FILE) {
         try { return Get-Content $CONFIG_FILE -Raw | ConvertFrom-Json } catch {}
     }
@@ -1433,9 +1449,10 @@ function Unprotect-SecretText {
 
 function Save-Config {
     param($Cfg)
+    if ([string]::IsNullOrWhiteSpace($CONFIG_FILE)) { return }
     try {
         $dir = Split-Path $CONFIG_FILE
-        if (!(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        if (-not [string]::IsNullOrWhiteSpace($dir) -and !(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
         $Cfg | ConvertTo-Json -Depth 3 | Out-File -FilePath $CONFIG_FILE -Encoding UTF8 -Force
     } catch {}
 }

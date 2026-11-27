@@ -28,7 +28,7 @@ Le dossier extrait contient tout : le programme, ses fenêtres (`Maquette\`), le
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `Install-Office2024-KMS.ps1` | Moteur : déroulé de déploiement extrait par l'EXE ; son interface WinForms historique reste exécutable telle quelle |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (177 cas, `-Fast` pour la section 1 seule) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (183 cas, `-Fast` pour la section 1 seule) |
 | `version.txt` | Version de l'outil, source unique : le badge, le README, le script et `Compare-ExeRecompilation.ps1` s'y comparent |
 | `Set-Version.ps1` | Vérifie ou écrit cette version partout, et refuse si un emplacement diverge |
 | `New-Livraison.ps1` | Construit `Livraison.zip` en liste blanche, avec `SHA256SUMS` |
@@ -302,7 +302,7 @@ Invoke-PS2EXE -InputFile "Apercu-Maquette.ps1" `
               -Product "InstallOffice" `
               -Description "Installation Office LTSC 2024 et activation KMS" `
               -Company "Lycee Loritz" `
-              -Version "8.5.2.0"
+              -Version "8.5.3.0"
 ```
 
 (`Install-Module ps2exe` si le module est absent.)
@@ -371,7 +371,7 @@ conforme.
 Empreinte du binaire livré, publiée ici pour être comparée sans git :
 
 ```
-SHA256 Install-Office2024-KMS.exe = 0B18A3826426356832521BE390DCE198F78E2990B08175B032145C3CFF4AE190
+SHA256 Install-Office2024-KMS.exe = 8A522ED3EA99CC6377603726AEECB176E7093BCD6AD0FFB743560579F1D30ECE
 ```
 
 La suite compare cette ligne au fichier livré : une recompilation sans mise à jour du
@@ -381,7 +381,7 @@ README fait échouer le contrôle, et `SHA256SUMS` la reprend dans le ZIP.
 
 Pousser un tag `v*` déclenche `.github/workflows/publication-livraison.yml` :
 
-1. le tag doit correspondre à `version.txt` (`v8.5.2` pour `8.5.2.0`), sinon le job
+1. le tag doit correspondre à `version.txt` (`v8.5.3` pour `8.5.3.0`), sinon le job
    s'arrête avant de construire quoi que ce soit ;
 2. avant toute construction, `Test-InstallOffice.ps1 -Fast` vérifie que l'EXE du tag
    embarque bien le script tagué (empreinte et version), puis le workflow compare
@@ -425,7 +425,7 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps
 embarqué, propriétés de l'EXE, présence des fichiers livrés avec lui et interface ouverte
 hors écran avec chaque nom résolu — soit quelques secondes : c'est exactement ce que lance
 le hook avant chaque commit. Sans commutateur, la
-suite complète (177 cas) tourne, comme sur GitHub.
+suite complète (183 cas) tourne, comme sur GitHub.
 
 Le **dernier contrôle** de la suite relit ce README, y cherche toutes les mentions
 « N cas » et exige qu'elles valent le total réellement exécuté : un cas ajouté ou retiré
@@ -466,7 +466,7 @@ message **RECOMPILER** (section « Compilation de l'EXE »). Si le binaire n'exp
 script en clair (format compressé ou construction différente), l'échec dit que l'empreinte
 n'est **pas vérifiable** — sans conseil de recompilation, qui serait alors trompeur.
 
-Les autres propriétés du binaire livré sont contrôlées aussi : version `8.5.2.0`, titre
+Les autres propriétés du binaire livré sont contrôlées aussi : version `8.5.3.0`, titre
 `Deploiement Office 2024`, produit `InstallOffice`, société `Lycee Loritz` et manifeste
 `requireAdministrator`, plus `OriginalFilename` et `InternalName`, qui doivent porter le nom
 du fichier livré. Chaque écart nomme la valeur trouvée, celle attendue et l'option
@@ -549,7 +549,7 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   ralenti ; `git commit --no-verify` reste possible pour un cas exceptionnel, et se voit
   dans l'historique.
 - **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la suite
-  **complète** (177 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
+  **complète** (183 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
   request : un EXE oublié ou compilé autrement fait échouer la vérification côté serveur,
   même si le hook local n'était pas installé — et sans rien imposer à la boucle locale.
 - **et la recompilation y est vérifiée aussi** : un job à part installe `ps2exe`,

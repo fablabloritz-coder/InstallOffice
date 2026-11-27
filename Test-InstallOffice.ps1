@@ -549,6 +549,87 @@ try {
         Check "demarrage : un chemin de script nul ne leve plus, le dossier du binaire prend le relais" (($dNul -ne "") -and ($dNul -eq $dVide) -and ($dReel -eq $PSScriptRoot)) ("nul=" + $dNul + " vide=" + $dVide + " reel=" + $dReel)
         Check "demarrage : Split-Path ne recoit plus le chemin brut de MyInvocation" (-not ($apercuTexte -match 'Split-Path\s+-Parent\s+\$MyInvocation')) "le garde doit preceder l'appel, pas le suivre"
 
+        # --- Journal et polices : un demarrage ne peut plus rester muet -----------
+        # Une police qui n'a pas pu etre creee rendait $null, et l'affectation a
+        # FontFamily levait "Exception lors de la definition de FontFamily" : la ligne
+        # n'entrait jamais au journal, qui restait vide. Les deux gardes ci-dessous
+        # rendent une police de repli et n'affectent jamais $null.
+        Add-Type -AssemblyName PresentationFramework | Out-Null
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "New-PoliceSure")
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Set-Police")
+        # Nom vide : la source demandee ne peut pas etre retenue, la police vient donc
+        # du repli. Sans ce repli, WPF rend une police de source vide et le glyphe tombe
+        # sur la police par defaut, sans que rien ne le dise.
+        $policeRepli = New-PoliceSure ""
+        $policeReelle = New-PoliceSure "Segoe UI Variable Text, Segoe UI"
+        $repliSource = if ($null -eq $policeRepli) { "nul" } else { [string]$policeRepli.Source }
+        Check "journal : un nom de police vide rend une police de repli, jamais nulle" (($null -ne $policeRepli) -and ($policeRepli -is [System.Windows.Media.FontFamily]) -and ($repliSource -ne "") -and ($null -ne $policeReelle)) ("repli=[" + $repliSource + "] reelle=" + $(if ($null -eq $policeReelle) { "nul" } else { $policeReelle.Source }))
+        $sansErreurPolice = $true
+        try { Set-Police (New-Object System.Windows.Controls.TextBlock) $null } catch { $sansErreurPolice = $false }
+        Check "journal : une police nulle n'est jamais affectee (pas d'exception FontFamily)" $sansErreurPolice "Set-Police a leve sur une police nulle"
+
+        # Le journal doit s'ecrire meme si le panneau manque : c'est ce qui rendait un
+        # "journal vide" sur une fenetre dont un nom avait change.
+        $script:journalTexte = New-Object System.Collections.Generic.List[string]
+        $script:journalLignes = 0
+        $baseHorloge = $null
+        $pinceaux = New-Object System.Windows.Media.BrushConverter
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Get-Pinceau")
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Add-Journal")
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Get-JournalTexte")
+        $fausseFenetre = New-Object PSObject
+        Add-Member -InputObject $fausseFenetre -MemberType ScriptMethod -Name FindName -Value { param($n) return $null }
+        $journalOk = $true
+        try { Add-Journal $fausseFenetre "info" "ligne de preuve" } catch { $journalOk = $false }
+        $texteJournal = Get-JournalTexte $fausseFenetre
+        Check "journal : une ligne s'ecrit sans panneau et l'export la reprend" ($journalOk -and ($texteJournal -match "ligne de preuve")) ("exception=" + (-not $journalOk) + " texte=[" + $texteJournal + "]")
+
+        # Un etat d'etape qu'une autre version du worker nomme autrement tombait sur
+        # $null : "expression Null" a chaque battement, et plus rien au journal.
+        $script:etapeEncours = 0
+        $policeTexte = $policeReelle
+        $policeIcone = $policeReelle
+        $renduEtapes = @{
+            attente = @{ Fond = "#EDEDED" ; Texte = "#8A8A8A" }
+            encours = @{ Fond = "#0F6CBD" ; Texte = "#FFFFFF" }
+            termine = @{ Fond = "#DFF6DD" ; Texte = "#0F7B0F" }
+            saute   = @{ Fond = "#F0F0F0" ; Texte = "#8A8A8A" }
+            erreur  = @{ Fond = "#FDE7E9" ; Texte = "#C42B1C" }
+        }
+        $glyphes = @{ termine = "v" ; saute = "s" ; erreur = "!" }
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Set-Etape")
+        $puce = New-Object System.Windows.Controls.Border
+        $glyphe = New-Object System.Windows.Controls.TextBlock
+        $titre = New-Object System.Windows.Controls.TextBlock
+        $info = New-Object System.Windows.Controls.TextBlock
+        $fausseEtape = New-Object PSObject
+        Add-Member -InputObject $fausseEtape -MemberType ScriptMethod -Name FindName -Value { param($n) switch ($n) { "Etape1" { return $puce } "Glyphe1" { return $glyphe } "Titre1" { return $titre } "Etat1" { return $info } default { return $null } } }
+        Add-Member -InputObject $fausseEtape -MemberType ScriptMethod -Name FindResource -Value { param($n) return "libelle" }
+        $etapeOk = $true
+        try { Set-Etape $fausseEtape 1 "etat-inconnu" } catch { $etapeOk = $false }
+        Check "etape : un etat inconnu retombe sur attente au lieu de lever" ($etapeOk -and ($glyphe.Text -eq "1")) ("exception=" + (-not $etapeOk) + " texte=[" + $glyphe.Text + "]")
+
+        # --- Chemins de travail : un dossier vide n'atteint plus Join-Path --------
+        # C'est le parametre Path nul de la fenetre d'erreur : le marqueur de relais et
+        # la configuration ne doivent jamais construire un chemin a partir de rien.
+        Invoke-Expression (Get-FunctionText -Lines $lines -Name "Get-DossierTravail")
+        Invoke-Expression (Get-FunctionText -Lines $lines -Name "Get-RelayMarkerPath")
+        $LOG_FOLDER = ""
+        $sauveLocal = $env:LOCALAPPDATA
+        $env:LOCALAPPDATA = ""
+        $marqueurVide = ""
+        $marqueurOk = $true
+        try { $marqueurVide = Get-RelayMarkerPath } catch { $marqueurOk = $false }
+        $env:LOCALAPPDATA = $sauveLocal
+        Check "reliquat : un dossier de travail vide ne lie plus un chemin nul" ($marqueurOk -and ($marqueurVide -ne "") -and ($marqueurVide -match 'relay-port\.txt$')) ("exception=" + (-not $marqueurOk) + " chemin=[" + $marqueurVide + "]")
+        Invoke-Expression (Get-FunctionText -Lines $lines -Name "Get-Config")
+        Invoke-Expression (Get-FunctionText -Lines $lines -Name "Save-Config")
+        $CONFIG_FILE = ""
+        $lectureVide = $null
+        $configOk = $true
+        try { $lectureVide = Get-Config ; Save-Config ([pscustomobject]@{ KmsServer = "x" }) } catch { $configOk = $false }
+        Check "configuration : un chemin vide n'est ni lu ni ecrit, sans lever" ($configOk -and ($null -eq $lectureVide)) ("exception=" + (-not $configOk))
+
         # --- Cle produit : l'exemple du champ n'est pas une cle -----------------
         Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Get-CleSaisie")
         $exempleCle = "XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"
