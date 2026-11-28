@@ -690,7 +690,12 @@ try {
         $apresSortie = $champEssai.Text
         Set-ChampReel -Champ $champEssai -Texte $exempleKms
         $vraieIdentique = ((Get-ValeurSaisie -Texte $champEssai.Text -Exemple (Get-ExempleChamp $champEssai)) -eq $exempleKms)
-        Check "champs KMS : l'exemple s'efface, revient, et n'est jamais transmis (une vraie adresse identique reste valable)" (($apresFocus -eq "") -and ($apresSortie -eq $exempleKms) -and $exempleJamais -and $vraieIdentique -and (([regex]::Matches($src, "Get-ValeurSaisie")).Count -ge 4)) ("focus=[" + $apresFocus + "] sortie=[" + $apresSortie + "] exemple transmis=" + (-not $exempleJamais) + " vraie identique=" + $vraieIdentique)
+        Check "champs KMS : l'exemple s'efface, revient et n'est jamais transmis" (($apresFocus -eq "") -and ($apresSortie -eq $exempleKms) -and $exempleJamais -and (([regex]::Matches($src, "Get-ValeurSaisie")).Count -ge 4)) ("focus=[" + $apresFocus + "] sortie=[" + $apresSortie + "] exemple transmis=" + (-not $exempleJamais))
+        # Meme texte que l'exemple, mais venu d'une saisie ou de la configuration : le
+        # champ est marque comme touche, donc ce n'est plus un exemple.
+        Set-ChampReel -Champ $champEssai -Texte $exempleKms
+        $vraieIdentique = ((Get-ValeurSaisie -Texte $champEssai.Text -Exemple (Get-ExempleChamp $champEssai)) -eq $exempleKms)
+        Check "champs KMS : une vraie adresse identique a l'exemple reste valable" $vraieIdentique ("valeur=[" + $champEssai.Text + "] exemple=[" + (Get-ExempleChamp $champEssai) + "] rendu=[" + (Get-ValeurSaisie -Texte $champEssai.Text -Exemple (Get-ExempleChamp $champEssai)) + "]")
 
         # Premier lancement : sans adresse reelle, l'activation est decochee et le pied
         # ne promet pas un depart que le clic refuserait.

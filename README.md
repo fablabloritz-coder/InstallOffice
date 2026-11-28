@@ -28,7 +28,7 @@ Le dossier extrait contient tout : le programme, ses fenêtres (`Maquette\`), le
 | `Install-Office2024-KMS.exe` | Version compilée (PS2EXE, manifeste `requireAdmin`) |
 | `Install-Office2024-KMS.ps1` | Moteur : déroulé de déploiement extrait par l'EXE ; son interface WinForms historique reste exécutable telle quelle |
 | `OfficeConfig2024.xml` | Modèle de configuration ODT (référence / XML personnalisé) |
-| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (189 cas, `-Fast` pour la section 1 seule) |
+| `Test-InstallOffice.ps1` | Contrôles automatisés hors ligne (190 cas, `-Fast` pour la section 1 seule) |
 | `version.txt` | Version de l'outil, source unique : le badge, le README, le script et `Compare-ExeRecompilation.ps1` s'y comparent |
 | `Set-Version.ps1` | Vérifie ou écrit cette version partout (exemple de tag `vX.Y.Z` du README compris), et refuse si un emplacement diverge |
 | `New-Livraison.ps1` | Construit `Livraison.zip` en liste blanche, avec `SHA256SUMS` |
@@ -425,7 +425,7 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\Test-InstallOffice.ps
 embarqué, propriétés de l'EXE, présence des fichiers livrés avec lui et interface ouverte
 hors écran avec chaque nom résolu — soit quelques secondes : c'est exactement ce que lance
 le hook avant chaque commit. Sans commutateur, la
-suite complète (189 cas) tourne, comme sur GitHub.
+suite complète (190 cas) tourne, comme sur GitHub.
 
 Le **dernier contrôle** de la suite relit ce README, y cherche toutes les mentions
 « N cas » et exige qu'elles valent le total réellement exécuté : un cas ajouté ou retiré
@@ -549,7 +549,7 @@ Le contrôle ne dépend pas de la mémoire de celui qui commite :
   ralenti ; `git commit --no-verify` reste possible pour un cas exceptionnel, et se voit
   dans l'historique.
 - **sur GitHub**, le workflow `.github/workflows/controle-exe.yml` rejoue la suite
-  **complète** (189 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
+  **complète** (190 cas) sur `windows-latest` à chaque push sur `main` et à chaque pull
   request : un EXE oublié ou compilé autrement fait échouer la vérification côté serveur,
   même si le hook local n'était pas installé — et sans rien imposer à la boucle locale.
 - **et la recompilation y est vérifiée aussi** : un job à part installe `ps2exe`,
