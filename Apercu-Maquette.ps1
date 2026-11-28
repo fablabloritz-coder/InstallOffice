@@ -83,6 +83,10 @@ $script:journalLignes = 0
 # Journal hors panneau : chaque ligne y est gardee avant tout affichage, pour que
 # l'export d'un demarrage en echec ne soit jamais un fichier vide.
 $script:journalTexte = New-Object System.Collections.Generic.List[string]
+# Exemples affiches dans des champs (adresses KMS) : jamais transmis comme valeurs.
+$script:exemples = @{}
+# Vrai pendant un changement de texte fait par le script (effacement/retour de l'exemple).
+$script:exempleInterne = $false
 
 Add-Type -AssemblyName PresentationFramework
 # PresentationCore porte System.Windows.Media.FontFamily : sans lui, la creation d'une
@@ -261,10 +265,28 @@ function Test-PortTcp {
     $resultat
 }
 
+function Get-NomWindows {
+    # Nomme le poste a partir de ce que Windows publie. CurrentMajorVersionNumber vaut
+    # 10 sur Windows 10 comme sur Windows 11 : c'est la build qui tranche (22000 est la
+    # premiere build Windows 11). Le seuil d'acceptation reste le numero majeur, que le
+    # moteur lit aussi.
+    param([int]$Majeure, [string]$Build, [string]$Affichage)
+    $morceaux = @()
+    if ($Affichage -ne "") { $morceaux += $Affichage }
+    if ($Build -ne "") { $morceaux += ("(" + $Build + ")") }
+    $nom = [string]$Majeure
+    if ($Build -match '^\d+$') {
+        if ([int]$Build -ge 22000) { $nom = "11" }
+        elseif ([int]$Build -ge 10240) { $nom = "10" }
+    }
+    # Deux formes : Libelle pour le journal et le pied de carte, Court pour la ligne
+    # de la carte, dont l'etiquette porte deja le mot Windows.
+    $court = if ($Majeure -ge 10) { (($nom + " " + ($morceaux -join " ")).Trim()) } else { "inconnu" }
+    return @{ Ok = ($Majeure -ge 10) ; Court = $court ; Libelle = ("Windows " + $court) }
+}
+
 function Get-VersionWindows {
-    # Libelle court : "Windows 11 24H2 (26100)". Le moteur lit deja
-    # CurrentMajorVersionNumber pour son seuil ; la build et la version d'affichage
-    # etaient lues sans etre montrees, d'ou l'impression d'une version fausse.
+    # Lit la version du poste et la nomme : "Windows 11 24H2 (26100)".
     $majeure = 0 ; $build = "" ; $affichage = ""
     try {
         $cle = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -ErrorAction Stop
@@ -272,13 +294,7 @@ function Get-VersionWindows {
         $build = [string]$cle.CurrentBuildNumber
         $affichage = [string]$cle.DisplayVersion
     } catch { }
-    $morceaux = @()
-    if ($affichage -ne "") { $morceaux += $affichage }
-    if ($build -ne "") { $morceaux += ("(" + $build + ")") }
-    # Deux formes : Libelle pour le journal et le pied de carte, Court pour la ligne
-    # de la carte, dont l'etiquette porte deja le mot Windows.
-    $court = if ($majeure -ge 10) { (([string]$majeure + " " + ($morceaux -join " ")).Trim()) } else { "inconnu" }
-    return @{ Ok = ($majeure -ge 10) ; Court = $court ; Libelle = ("Windows " + $court) }
+    return (Get-NomWindows -Majeure $majeure -Build $build -Affichage $affichage)
 }
 
 function Get-PreVol {
@@ -312,6 +328,9 @@ $etatsPreVol = @{
     encours = @{ Glyphe = [string][char]0xE895 ; Couleur = "#0F6CBD" }
     attente = @{ Glyphe = [string][char]0xE738 ; Couleur = "#8A8A8A" }
     erreur  = @{ Glyphe = [string][char]0xE711 ; Couleur = "#C42B1C" }
+    # Un KMS injoignable n'est pas une erreur du poste : avertissement orange, jamais
+    # un refus de depart (on peut installer hors du reseau du KMS).
+    avr     = @{ Glyphe = [string][char]0xE7BA ; Couleur = "#9D5D00" }
 }
 
 function Set-LignePreVol {
@@ -340,15 +359,17 @@ function Update-PreVol {
         # transtypage s'applique a la methode et la valeur affichee est son nom.
         Set-LignePreVol $Fenetre "Setup"   "ok" ([string]$Fenetre.FindResource("PreVolPresent"))
         Set-LignePreVol $Fenetre "Disque"  "ok" "212 Go libres"
-        Set-LignePreVol $Fenetre "Kms"     "ok" "kms.ac-nancy.fr:1688, 42 ms"
+        if ([bool]$Fenetre.FindName("ChkKms").IsChecked) { Set-LignePreVol $Fenetre "Kms" "ok" "kms.ac-nancy.fr:1688, 42 ms" }
+        else { Set-LignePreVol $Fenetre "Kms" "attente" ([string]$Fenetre.FindResource("PreVolNonTeste")) }
         Set-LignePreVol $Fenetre "Windows" "ok" "11 24H2 (26100)"
         $Fenetre.FindName("InfoPoste").Text = "Administrateur, poste LORITZ-PC042, Windows 11 24H2"
         Add-Journal $Fenetre "avr" ("Pre-vol : " + [string]$Fenetre.FindResource("PreVolSimule"))
         return
     }
     $activerKms = [bool]$Fenetre.FindName("ChkKms").IsChecked
+    $champKms = $Fenetre.FindName("ChampKms")
     $c = Get-PreVol -SetupSaisi $Fenetre.FindName("ChampSetup").Text `
-                    -KmsSaisi $Fenetre.FindName("ChampKms").Text `
+                    -KmsSaisi (Get-ValeurSaisie $champKms.Text (Get-ExempleChamp $champKms)) `
                     -KmsActif $activerKms
 
     if ($c.SetupPresent) { Set-LignePreVol $Fenetre "Setup" "ok" ([string]$Fenetre.FindResource("PreVolPresent")) }
@@ -362,7 +383,7 @@ function Update-PreVol {
 
     if ($null -eq $c.Kms) { Set-LignePreVol $Fenetre "Kms" "attente" ([string]$Fenetre.FindResource("PreVolNonTeste")) }
     elseif ($c.Kms.Test.Ok) { Set-LignePreVol $Fenetre "Kms" "ok" ($c.Kms.Cible.Hote + ":" + $c.Kms.Cible.Port + ", " + $c.Kms.Test.Ms + " ms") }
-    else { Set-LignePreVol $Fenetre "Kms" "erreur" ($c.Kms.Cible.Hote + ":" + $c.Kms.Cible.Port + ", " + [string]$Fenetre.FindResource("PreVolInjoignable")) }
+    else { Set-LignePreVol $Fenetre "Kms" "avr" ($c.Kms.Cible.Hote + ":" + $c.Kms.Cible.Port + ", " + [string]$Fenetre.FindResource("PreVolInjoignable")) }
 
     if ($c.Os.Ok) { Set-LignePreVol $Fenetre "Windows" "ok" $c.Os.Court }
     else { Set-LignePreVol $Fenetre "Windows" "erreur" ($c.Os.Court + ", Windows 10+ requis") }
@@ -378,10 +399,11 @@ function Update-PreVol {
     } elseif ($c.Kms.Test.Ok) {
         Add-Journal $Fenetre "ok" ("Test TCP du KMS " + $c.Kms.Cible.Hote + ":" + $c.Kms.Cible.Port + " : joignable en " + $c.Kms.Test.Ms + " ms.")
     } else {
-        Add-Journal $Fenetre "err" ("Test TCP du KMS " + $c.Kms.Cible.Hote + ":" + $c.Kms.Cible.Port + " : injoignable (" + $c.Kms.Test.Motif + ").")
+        Add-Journal $Fenetre "avr" ("Test TCP du KMS " + $c.Kms.Cible.Hote + ":" + $c.Kms.Cible.Port + " : injoignable (" + $c.Kms.Test.Motif + ").")
     }
     # Les mesures sont rendues a l'appelant : le bouton Installer refuse de partir sur
     # autre chose que ce qui vient d'etre constate.
+    Update-PiedStatut $Fenetre
     return $c
 }
 
@@ -425,7 +447,7 @@ function Save-ConfigPoste {
     param($Fenetre, $Cfg)
     Save-Config ([pscustomobject]@{
             SetupExePath       = $Fenetre.FindName("ChampSetup").Text.Trim()
-            KmsServer          = $Fenetre.FindName("ChampKms").Text.Trim()
+            KmsServer          = (Get-ValeurSaisie $Fenetre.FindName("ChampKms").Text (Get-ExempleChamp $Fenetre.FindName("ChampKms")))
             Language           = $Fenetre.FindName("LangueTexte").Text
             RemoveOld          = $Cfg.RemoveOld
             AutoInstall        = $Cfg.DoInstall
@@ -440,7 +462,7 @@ function Save-ConfigPoste {
             ProxyUser          = $Fenetre.FindName("ChampProxyUser").Text.Trim()
             DepotEnabled       = $Cfg.DepotEnabled
             DepotPath          = $Fenetre.FindName("ChampDepot").Text.Trim()
-            KmsSecondaryServer = $Fenetre.FindName("ChampKmsSecours").Text.Trim()
+            KmsSecondaryServer = (Get-ValeurSaisie $Fenetre.FindName("ChampKmsSecours").Text (Get-ExempleChamp $Fenetre.FindName("ChampKmsSecours")))
             ApplyProductKey    = $Cfg.ApplyProductKey
             ProductKeyEnc      = (Protect-SecretText $Cfg.ProductKey)
             SavedAt            = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
@@ -453,10 +475,9 @@ function Save-ConfigPoste {
 # placeholder n'a pas ete capture, l'exemple ne part pas.
 function Get-CleSaisie {
     param([string]$Texte, [string]$Placeholder)
-    $t = ([string]$Texte).Trim()
+    $t = Get-ValeurSaisie -Texte $Texte -Exemple $Placeholder
     if ($t -eq "") { return "" }
     if ($t -cmatch '^X{5}(-X{5}){4}$') { return "" }
-    if (($Placeholder -ne "") -and ($t -eq ([string]$Placeholder).Trim())) { return "" }
     return $t
 }
 
@@ -475,12 +496,116 @@ function Register-ChampCle {
     })
 }
 
+# Un texte d'exemple n'est pas une valeur : il s'efface au premier focus, revient si
+# l'on quitte le champ vide, et n'est jamais transmis a la configuration ni au moteur.
+function Get-ValeurSaisie {
+    param([string]$Texte, [string]$Exemple)
+    $t = ([string]$Texte).Trim()
+    if ($t -eq "") { return "" }
+    if (($Exemple -ne "") -and ($t -eq ([string]$Exemple).Trim())) { return "" }
+    return $t
+}
+
+function Get-ExempleChamp {
+    # Rend le texte de l'exemple seulement tant que le champ n'a pas ete touche : une
+    # vraie valeur de meme texte (saisie, ou restauree depuis la configuration) reste
+    # une valeur, sinon kms.ac-nancy.fr, qui est une adresse reelle, serait avalee.
+    param($Champ)
+    if (($null -eq $Champ) -or ($null -eq $script:exemples)) { return "" }
+    if (-not $script:exemples.ContainsKey($Champ)) { return "" }
+    $e = $script:exemples[$Champ]
+    if ($e.Touche) { return "" }
+    return [string]$e.Texte
+}
+
+function Register-ChampExemple {
+    # Meme comportement que le champ de cle : l'exemple du XAML est gris, il s'efface au
+    # focus et revient si le champ est quitte vide. Le texte de reference vient du XAML.
+    # Touche distingue l'exemple d'une vraie valeur de meme texte.
+    param($Champ, [string]$CouleurExemple = "#8A8A8A", [string]$CouleurSaisie = "#1B1B1B")
+    if ($null -eq $Champ) { return }
+    if ($null -eq $script:exemples) { $script:exemples = @{} }
+    $script:exemples[$Champ] = @{
+        Texte   = [string]$Champ.Text
+        Exemple = (Get-Pinceau $CouleurExemple)
+        Saisie  = (Get-Pinceau $CouleurSaisie)
+        Touche  = $false
+    }
+    $Champ.Foreground = $script:exemples[$Champ].Exemple
+    $Champ.Add_GotFocus({
+        $e = $script:exemples[$this]
+        if (($null -ne $e) -and (-not $e.Touche) -and ($this.Text -eq $e.Texte)) {
+            $script:exempleInterne = $true ; $this.Text = "" ; $script:exempleInterne = $false
+            $this.Foreground = $e.Saisie
+        }
+    })
+    $Champ.Add_TextChanged({
+        if ($script:exempleInterne) { return }
+        $e = $script:exemples[$this]
+        if ($null -ne $e) { $e.Touche = $true }
+    })
+    $Champ.Add_LostFocus({
+        $e = $script:exemples[$this]
+        if (($null -ne $e) -and ([string]::IsNullOrWhiteSpace($this.Text))) {
+            $script:exempleInterne = $true ; $this.Text = $e.Texte ; $script:exempleInterne = $false
+            $e.Touche = $false
+            $this.Foreground = $e.Exemple
+        }
+    })
+}
+
+function Set-ChampReel {
+    # Valeur venue de la configuration ou d'un collage : ce n'est pas un exemple, meme si
+    # son texte est identique a celui du XAML. Le champ est marque comme saisi.
+    param($Champ, [string]$Texte)
+    if ($null -eq $Champ) { return }
+    $Champ.Text = $Texte
+    if (($null -ne $script:exemples) -and $script:exemples.ContainsKey($Champ)) {
+        $script:exemples[$Champ].Touche = $true
+        $Champ.Foreground = $script:exemples[$Champ].Saisie
+    }
+}
+
+function Disable-ActivationSansAdresse {
+    # Premier lancement : la case d'activation peut venir d'un ancien reglage alors que
+    # le champ KMS ne contient que l'exemple. Une activation sans adresse reelle serait
+    # refusee au clic : on la decoche et on le dit, pour que le depart reste possible.
+    param($Fenetre)
+    $chk = $Fenetre.FindName("ChkKms")
+    $champ = $Fenetre.FindName("ChampKms")
+    if (($null -eq $chk) -or ($null -eq $champ)) { return $false }
+    if (-not [bool]$chk.IsChecked) { return $false }
+    if ((Get-ValeurSaisie $champ.Text (Get-ExempleChamp $champ)) -ne "") { return $false }
+    $chk.IsChecked = $false
+    Add-Journal $Fenetre "avr" "Activation KMS decochee : aucune adresse reelle saisie (l'exemple n'est pas une adresse)."
+    return $true
+}
+
+function Update-PiedStatut {
+    # Le pied annonce ce que le clic va faire. Une case KMS cochee sans adresse reelle
+    # ne peut pas demarrer : le dire ici evite un "Pret a demarrer" contredit au clic.
+    param($Fenetre)
+    $pied = $Fenetre.FindName("PiedStatut")
+    if ($null -eq $pied) { return }
+    $chk = $Fenetre.FindName("ChkKms")
+    $champ = $Fenetre.FindName("ChampKms")
+    $actif = ($null -ne $chk) -and ([bool]$chk.IsChecked)
+    $adresse = if ($null -ne $champ) { Get-ValeurSaisie $champ.Text (Get-ExempleChamp $champ) } else { "" }
+    $bloque = ($actif -and ($adresse -eq ""))
+    $pied.Text = if ($bloque) { [string]$Fenetre.FindResource("PiedKmsAdresse") } else { [string]$Fenetre.FindResource("PiedPret") }
+    $icone = $Fenetre.FindName("PiedIcone")
+    if ($null -ne $icone) {
+        $icone.Text = if ($bloque) { [string][char]0xE7BA } else { [string][char]0xE73E }
+        $icone.Foreground = Get-Pinceau $(if ($bloque) { "#9D5D00" } else { "#0F7B0F" })
+    }
+}
+
 function Import-ConfigPoste {
     param($Fenetre)
     $s = Get-Config
     if ($null -eq $s) { return }
     if ($s.SetupExePath) { $Fenetre.FindName("ChampSetup").Text = Resolve-SetupPath ([string]$s.SetupExePath) }
-    if ($s.KmsServer) { $Fenetre.FindName("ChampKms").Text = [string]$s.KmsServer }
+    if ($s.KmsServer) { Set-ChampReel -Champ $Fenetre.FindName("ChampKms") -Texte ([string]$s.KmsServer) }
     if ($s.Language) { $Fenetre.FindName("LangueTexte").Text = [string]$s.Language }
     if ($null -ne $s.RemoveOld) { $Fenetre.FindName("ChkRemoveOld").IsChecked = [bool]$s.RemoveOld }
     if ($null -ne $s.AutoInstall) { $Fenetre.FindName("ChkInstall").IsChecked = [bool]$s.AutoInstall }
@@ -497,7 +622,7 @@ function Import-ConfigPoste {
     if ($s.ProxyUser) { $Fenetre.FindName("ChampProxyUser").Text = [string]$s.ProxyUser }
     if ($null -ne $s.DepotEnabled) { $Fenetre.FindName("ChkDepot").IsChecked = [bool]$s.DepotEnabled }
     if ($s.DepotPath) { $Fenetre.FindName("ChampDepot").Text = [string]$s.DepotPath }
-    if ($s.KmsSecondaryServer) { $Fenetre.FindName("ChampKmsSecours").Text = [string]$s.KmsSecondaryServer }
+    if ($s.KmsSecondaryServer) { Set-ChampReel -Champ $Fenetre.FindName("ChampKmsSecours") -Texte ([string]$s.KmsSecondaryServer) }
     if ($null -ne $s.ApplyProductKey) { $Fenetre.FindName("ChkCle").IsChecked = [bool]$s.ApplyProductKey }
     if ($s.ProductKeyEnc) { $Fenetre.FindName("ChampCle").Text = Unprotect-SecretText ([string]$s.ProductKeyEnc) }
     Update-Options $Fenetre
@@ -524,6 +649,8 @@ function Save-Journal {
         if (-not (Test-Path -LiteralPath $dossier)) { New-Item -ItemType Directory -Path $dossier -Force | Out-Null }
         $fichier = Join-Path $dossier ("deploy_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".log")
         Set-Content -LiteralPath $fichier -Value (Get-JournalTexte $Fenetre) -Encoding UTF8
+        $etiquette = $Fenetre.FindName("JournalFichier")
+        if ($null -ne $etiquette) { $etiquette.Text = [System.IO.Path]::GetFileName($fichier) }
         return $fichier
     } catch { return "" }
 }
@@ -538,6 +665,8 @@ function Export-Journal {
         try {
             Set-Content -LiteralPath $dlg.FileName -Value (Get-JournalTexte $Fenetre) -Encoding UTF8
             Add-Journal $Fenetre "ok" ("Journal exporte : " + $dlg.FileName)
+            $etiquette = $Fenetre.FindName("JournalFichier")
+            if ($null -ne $etiquette) { $etiquette.Text = [System.IO.Path]::GetFileName($dlg.FileName) }
         } catch {
             Add-Journal $Fenetre "err" ("Export impossible : " + $_.Exception.Message)
         }
@@ -674,7 +803,7 @@ function Get-ConfigDeploiement {
         DoActivate      = [bool]$Fenetre.FindName("ChkKms").IsChecked
         KmsHost         = $(if ($null -ne $PreVol.Kms) { $PreVol.Kms.Cible.Hote } else { "" })
         KmsPort         = $(if ($null -ne $PreVol.Kms) { [string]$PreVol.Kms.Cible.Port } else { "1688" })
-        KmsSecondary    = $Fenetre.FindName("ChampKmsSecours").Text.Trim()
+        KmsSecondary    = (Get-ValeurSaisie $Fenetre.FindName("ChampKmsSecours").Text (Get-ExempleChamp $Fenetre.FindName("ChampKmsSecours")))
         ProxyEnabled    = $mode.Proxy
         ProxyHost       = $Fenetre.FindName("ChampProxy").Text.Trim()
         ProxyPort       = $Fenetre.FindName("ChampPort").Text.Trim()
@@ -709,6 +838,9 @@ function Get-RefusDeploiement {
         if (-not $PreVol.Os.Ok) { $refus += "Windows 10+ requis" }
     }
     if (-not $PreVol.Admin) { $refus += "droits administrateur absents" }
+    # Decision : la joignabilite du KMS n'est jamais un refus. Un poste hors du reseau
+    # du KMS doit pouvoir installer ; l'activation se rejoue ensuite ("Activer
+    # seulement"). Seule une activation demandee sans aucune adresse bloque le depart.
     if ($Cfg.DoActivate -and $Cfg.KmsHost -eq "") { $refus += "activation KMS demandee sans adresse de serveur" }
     if ($Cfg.UseCustomXML -and $Cfg.CustomXMLPath -eq "") { $refus += "fichier XML choisi mais chemin vide" }
     if ($Cfg.DepotEnabled -and $Cfg.DepotPath -eq "") { $refus += "depot de sources active sans chemin" }
@@ -1407,6 +1539,7 @@ function Update-Options {
     $auto = [bool]$Fenetre.FindName("RadXmlAuto").IsChecked
     Set-Actif $Fenetre @("BtnApps", "LblApps") $auto
     Set-Actif $Fenetre @("ChampXml", "BtnXml") (-not $auto)
+    Update-PiedStatut $Fenetre
 }
 
 # Scenario simule. Chaque scene ne porte que ce qu'elle change : les etapes qui
@@ -1894,6 +2027,7 @@ if ($Capture -ne "") {
     } else {
         $win = Import-Xaml "Principal.xaml"
         # Capture : valeurs de reference, sauf -Mesure qui interroge vraiment le poste.
+        Update-Options $win
         if ($Mesure) { $null = Update-PreVol $win } else { $null = Update-PreVol $win -Simule }
         for ($k = 0; $k -le $Etape; $k++) { Set-Scene $win $k }
         if ($Focus -ne "") { Set-FocusCapture $win $Focus }
@@ -2008,14 +2142,28 @@ $win.FindName("LangueChoix").Add_MouseLeftButtonDown({
     $t.Text = if ($t.Text -eq "fr-fr") { "en-us" } else { "fr-fr" }
     Add-Journal $win "info" ("Langue d'installation : " + $t.Text)
 })
-foreach ($n in @("ChkDepot", "ChkProxy", "ChkKms", "ChkCle", "RadXmlAuto", "RadXmlFichier")) {
+foreach ($n in @("ChkDepot", "ChkProxy", "ChkCle", "RadXmlAuto", "RadXmlFichier")) {
     $win.FindName($n).Add_Click({ Update-Options $win })
 }
+# Cocher l'activation sans adresse reelle ne doit pas laisser croire que le depart est
+# pret : le pied et le journal le disent avant le clic.
+$win.FindName("ChkKms").Add_Click({
+    Update-Options $win
+    if ([bool]$win.FindName("ChkKms").IsChecked) {
+        $champ = $win.FindName("ChampKms")
+        if ((Get-ValeurSaisie $champ.Text (Get-ExempleChamp $champ)) -eq "") {
+            Add-Journal $win "avr" "Activation KMS : saisir une adresse reelle (l'exemple n'est pas une adresse)."
+        }
+    }
+})
 Update-Options $win
 
 # Le champ de cle affiche un exemple tant qu'aucune valeur n'est saisie : le cablage
 # est le meme que celui verifie hors ecran par -VerifierCle.
 Register-ChampCle $win
+# Les deux adresses KMS du XAML sont des exemples, pas des valeurs : meme mecanisme.
+Register-ChampExemple $win.FindName("ChampKms")
+Register-ChampExemple $win.FindName("ChampKmsSecours")
 
 # Reglages du poste, puis mesures : l'ecran ne montre que ce qui a ete constate sur
 # les valeurs qui partiront reellement.
@@ -2023,6 +2171,7 @@ Register-ChampCle $win
 # chaque etape est bornee, et le detail part au journal.
 foreach ($etapeDemarrage in @(
         @{ Nom = "reglages du poste" ; Action = { param($f) Import-ConfigPoste $f } },
+        @{ Nom = "activation KMS par defaut" ; Action = { param($f) if (Disable-ActivationSansAdresse $f) { Update-Options $f } } },
         @{ Nom = "pre-vol" ; Action = { param($f) $null = Update-PreVol $f } },
         @{ Nom = "reliquat de proxy" ; Action = { param($f) Show-ReliquatMesure $f } })) {
     try { & $etapeDemarrage.Action $win }

@@ -26,6 +26,8 @@
       <sys:String x:Key="PreVolNonTeste">Non testé</sys:String>
       <sys:String x:Key="PreVolInjoignable">injoignable</sys:String>
       <sys:String x:Key="PreVolSimule">valeurs simulées (mode capture)</sys:String>
+      <sys:String x:Key="PiedPret">Prêt à démarrer</sys:String>
+      <sys:String x:Key="PiedKmsAdresse">Activation KMS : adresse requise</sys:String>
     </ResourceDictionary>
   </Window.Resources>
 
@@ -302,7 +304,7 @@
                   <TextBlock Text="Journal" Style="{StaticResource TitreSection}" Foreground="{StaticResource AccentArdoise}"/>
                 </Border>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                  <TextBlock Text="Deploiement_20261122.log" Style="{StaticResource Secondaire}"
+                  <TextBlock x:Name="JournalFichier" Text="" Style="{StaticResource Secondaire}"
                              VerticalAlignment="Center" Margin="0,0,10,0"/>
                   <Button x:Name="BtnEffacer" Style="{StaticResource BoutonSecondaire}" Content="Effacer"
                           Padding="10,3" FontSize="12"/>
@@ -437,8 +439,8 @@
                     <ColumnDefinition Width="Auto"/>
                   </Grid.ColumnDefinitions>
                   <CheckBox x:Name="ChkKms" Style="{StaticResource Case}" Content="Activer via KMS"
-                            IsChecked="True" VerticalAlignment="Center"/>
-                  <TextBox x:Name="ChampKms" Grid.Column="1" Style="{StaticResource Champ}"
+                            IsChecked="False" VerticalAlignment="Center"/>
+                  <TextBox x:Name="ChampKms" Grid.Column="1" Style="{StaticResource Champ}" Foreground="#8A8A8A"
                            Text="kms.ac-nancy.fr" Margin="10,0,0,0"/>
                   <Button x:Name="BtnTestKms" Grid.Column="2" Style="{StaticResource BoutonSecondaire}"
                           Content="Tester la connexion" Padding="10,4" FontSize="12"
@@ -450,7 +452,7 @@
                     <ColumnDefinition Width="*"/>
                   </Grid.ColumnDefinitions>
                   <TextBlock Text="Serveur KMS de secours" Style="{StaticResource Etiquette}"/>
-                  <TextBox x:Name="ChampKmsSecours" Grid.Column="1" Style="{StaticResource Champ}"
+                  <TextBox x:Name="ChampKmsSecours" Grid.Column="1" Style="{StaticResource Champ}" Foreground="#8A8A8A"
                            Text="kms2.ac-nancy.fr:1688"/>
                 </Grid>
                 <Grid Margin="0,7,0,0">
@@ -530,7 +532,7 @@
         <Grid Margin="18,0">
           <StackPanel VerticalAlignment="Center">
             <StackPanel Orientation="Horizontal">
-              <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+              <TextBlock x:Name="PiedIcone" Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="12"
                          Foreground="{StaticResource Succes}" VerticalAlignment="Center"/>
               <TextBlock x:Name="PiedStatut" Text="Prêt à démarrer" Margin="8,0,0,0"
                          VerticalAlignment="Center"/>

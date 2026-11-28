@@ -489,6 +489,14 @@ try {
         $ecartsVersion = @($versionsReadme | Where-Object { $_ -ne $vSource })
         Check "README : versions annoncees = version de version.txt" (($versionsReadme.Count -gt 0) -and ($ecartsVersion.Count -eq 0)) ("README annonce=" + ($versionsReadme -join ", ") + " version.txt=" + $vSource + " - aligner le README (commande Invoke-PS2EXE et prose)")
 
+        # Le nom du journal etait fige dans le XAML (Deploiement_20261122.log) : il
+        # annoncait une date passee et aucun fichier reellement ecrit. Le champ porte un
+        # nom et suit le fichier ecrit par le deploiement ou par l'export.
+        $nomFige = [regex]::Match($texteXaml, 'Text="[^"]*Deploiement_[0-9]{8}\.log"').Success
+        $champJournal = [regex]::Match($texteXaml, 'x:Name="JournalFichier"').Success
+        $misesAJour = ([regex]::Matches($src, 'JournalFichier')).Count
+        Check "journal : le nom de fichier n'est plus fige dans le XAML" ((-not $nomFige) -and $champJournal -and ($misesAJour -ge 2)) ("fige=" + $nomFige + " champ=" + $champJournal + " mises a jour=" + $misesAJour)
+
         # --- Une seule source : version.txt, tenue par Set-Version.ps1 --------------
         # Le script verifie l'alignement (code 0) et refuse d'ecrire des qu'un emplacement
         # diverge (code 1). Les deux sont eprouves sur une copie, jamais sur le depot.
@@ -535,6 +543,14 @@ try {
                 [regex]::Match([System.IO.File]::ReadAllText((Join-Path $copieBump "README.md")), '-Version\s+"([0-9.]+)"').Groups[1].Value
             )
             Check "version : le bump ecrit version.txt et les quatre copies" (($codeBump -eq 0) -and (@($vues | Where-Object { $_ -ne $vCible }).Count -eq 0)) ("code=" + $codeBump + " cible=" + $vCible + " vues=" + ($vues -join ", "))
+
+            # L'exemple de tag du README suit la meme regle que le workflow de
+            # publication : la version sans son dernier ".0" (v8.5.3 pour 8.5.3.0).
+            # Un bump qui le laisse perime ferait poser un tag que la publication
+            # refuserait, apres coup et sans que la suite locale l'ait vu.
+            $tagAttendu = "v" + ($vCible -replace '\.0$', '')
+            $tagEcrit = [regex]::Match([System.IO.File]::ReadAllText((Join-Path $copieBump "README.md")), '`(v[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?)` pour ').Groups[1].Value
+            Check "version : le bump met aussi a jour l'exemple de tag du README" (($codeBump -eq 0) -and ($tagEcrit -eq $tagAttendu)) ("code=" + $codeBump + " tag=" + $tagEcrit + " attendu=" + $tagAttendu)
         }
         # --- Demarrage de l'EXE : chemin du script nul ---------------------------
         # PS2EXE ne renseigne pas $MyInvocation.MyCommand.Path. Split-Path -Parent $null
@@ -542,6 +558,24 @@ try {
         # resolution est isolee dans Get-DossierScript, qui ne jette plus.
         $apercuTexte = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "Apercu-Maquette.ps1"))
         $lignesApercu = @($apercuTexte -split "`r?`n")
+        # CurrentMajorVersionNumber vaut 10 sur Windows 11 : le nom affiche doit venir de
+        # la build, sinon un poste 26300 s'annonce "Windows 10 26H2 (26300)".
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Get-NomWindows")
+        $os11 = Get-NomWindows -Majeure 10 -Build "26300" -Affichage "26H2"
+        $os10 = Get-NomWindows -Majeure 10 -Build "19045" -Affichage "22H2"
+        $osVieux = Get-NomWindows -Majeure 0 -Build "" -Affichage ""
+        Check "pre-vol : Windows 11 est nomme 11 (la build tranche, pas CurrentMajorVersionNumber)" (($os11.Court -eq "11 26H2 (26300)") -and ($os11.Libelle -eq "Windows 11 26H2 (26300)") -and ($os11.Ok) -and ($os10.Court -eq "10 22H2 (19045)") -and (-not $osVieux.Ok) -and ($osVieux.Court -eq "inconnu")) ("11=" + $os11.Court + " | 10=" + $os10.Court + " | vieux=" + $osVieux.Court)
+
+        # Decision : la joignabilite du KMS est un avertissement, jamais un refus. Un
+        # poste hors du reseau du KMS doit pouvoir installer ; l'activation se rejoue
+        # ensuite ("Activer seulement"). Seule une activation sans adresse bloque.
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Get-RefusDeploiement")
+        $cfgKms = [pscustomobject]@{ ActivateOnly = $false ; DoActivate = $true ; KmsHost = "kms.ac-nancy.fr" ; UseCustomXML = $false ; CustomXMLPath = "" ; DepotEnabled = $false ; DepotPath = "" }
+        $pvKms = [pscustomobject]@{ SetupPresent = $true ; AssezDEspace = $true ; LibreGo = 100 ; Os = @{ Ok = $true } ; Admin = $true ; Kms = @{ Test = @{ Ok = $false } } }
+        $refusInjoignable = @(Get-RefusDeploiement $cfgKms $pvKms)
+        $cfgSansAdresse = [pscustomobject]@{ ActivateOnly = $false ; DoActivate = $true ; KmsHost = "" ; UseCustomXML = $false ; CustomXMLPath = "" ; DepotEnabled = $false ; DepotPath = "" }
+        $refusSansAdresse = @(Get-RefusDeploiement $cfgSansAdresse $pvKms)
+        Check "pre-vol : un KMS injoignable avertit (orange) mais ne bloque pas le depart" (($refusInjoignable.Count -eq 0) -and (($refusSansAdresse -join " ") -match "sans adresse") -and ($src -match 'Set-LignePreVol \$Fenetre "Kms"\s+"avr"') -and ($src -match 'Add-Journal \$Fenetre "avr" \("Test TCP du KMS')) ("refus injoignable=" + $refusInjoignable.Count + " refus sans adresse=[" + ($refusSansAdresse -join " ; ") + "]")
         Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Get-DossierScript")
         $dNul = Get-DossierScript -Chemin ""
         $dVide = Get-DossierScript -Chemin $null
@@ -631,10 +665,57 @@ try {
         Check "configuration : un chemin vide n'est ni lu ni ecrit, sans lever" ($configOk -and ($null -eq $lectureVide)) ("exception=" + (-not $configOk))
 
         # --- Cle produit : l'exemple du champ n'est pas une cle -----------------
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Get-ValeurSaisie")
         Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Get-CleSaisie")
         $exempleCle = "XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"
         Check "cle produit : l'exemple n'est jamais transmis, meme sans placeholder releve" (((Get-CleSaisie -Texte $exempleCle -Placeholder $exempleCle) -eq "") -and ((Get-CleSaisie -Texte $exempleCle -Placeholder "") -eq "")) ("avec=" + (Get-CleSaisie -Texte $exempleCle -Placeholder $exempleCle) + " sans=" + (Get-CleSaisie -Texte $exempleCle -Placeholder ""))
         Check "cle produit : une vraie cle reste intacte, espaces retires" ((Get-CleSaisie -Texte " abcde-12345-fghij-67890-klmno " -Placeholder $exempleCle) -eq "abcde-12345-fghij-67890-klmno") ("rendu=" + (Get-CleSaisie -Texte " abcde-12345-fghij-67890-klmno " -Placeholder $exempleCle))
+
+        # Un exemple n'est ni une adresse ni une cle : il s'efface au focus, revient si
+        # le champ reste vide, et n'est jamais transmis. Une vraie adresse identique au
+        # texte de l'exemple reste une adresse des que le champ a ete touche.
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Get-ExempleChamp")
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Get-Pinceau")
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Register-ChampExemple")
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Set-ChampReel")
+        if ($null -eq $pinceaux) { $pinceaux = New-Object System.Windows.Media.BrushConverter }
+        $exempleKms = "kms.ac-nancy.fr"
+        $champEssai = New-Object System.Windows.Controls.TextBox
+        $champEssai.Text = $exempleKms
+        Register-ChampExemple -Champ $champEssai
+        $exempleJamais = ((Get-ValeurSaisie -Texte $exempleKms -Exemple (Get-ExempleChamp $champEssai)) -eq "")
+        [void]$champEssai.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.UIElement]::GotFocusEvent)))
+        $apresFocus = $champEssai.Text
+        [void]$champEssai.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.UIElement]::LostFocusEvent)))
+        $apresSortie = $champEssai.Text
+        Set-ChampReel -Champ $champEssai -Texte $exempleKms
+        $vraieIdentique = ((Get-ValeurSaisie -Texte $champEssai.Text -Exemple (Get-ExempleChamp $champEssai)) -eq $exempleKms)
+        Check "champs KMS : l'exemple s'efface, revient, et n'est jamais transmis (une vraie adresse identique reste valable)" (($apresFocus -eq "") -and ($apresSortie -eq $exempleKms) -and $exempleJamais -and $vraieIdentique -and (([regex]::Matches($src, "Get-ValeurSaisie")).Count -ge 4)) ("focus=[" + $apresFocus + "] sortie=[" + $apresSortie + "] exemple transmis=" + (-not $exempleJamais) + " vraie identique=" + $vraieIdentique)
+
+        # Premier lancement : sans adresse reelle, l'activation est decochee et le pied
+        # ne promet pas un depart que le clic refuserait.
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Get-ExempleChamp")
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Disable-ActivationSansAdresse")
+        Invoke-Expression (Get-FunctionText -Lines $lignesApercu -Name "Update-PiedStatut")
+        $chkEssai = New-Object System.Windows.Controls.CheckBox ; $chkEssai.IsChecked = $true
+        $tbEssai = New-Object System.Windows.Controls.TextBox ; $tbEssai.Text = "kms.ac-nancy.fr"
+        $piedEssai = New-Object System.Windows.Controls.TextBlock
+        if ($null -eq $script:exemples) { $script:exemples = @{} }
+        $script:exemples[$tbEssai] = @{ Texte = "kms.ac-nancy.fr" }
+        $fauxKms = New-Object PSObject
+        Add-Member -InputObject $fauxKms -MemberType ScriptMethod -Name FindName -Value { param($n) if ($n -eq "ChkKms") { return $script:chkEssai } elseif ($n -eq "ChampKms") { return $script:tbEssai } elseif ($n -eq "PiedStatut") { return $script:piedEssai } else { return $null } }
+        Add-Member -InputObject $fauxKms -MemberType ScriptMethod -Name FindResource -Value { param($n) if ($n -eq "PiedKmsAdresse") { return "KMS adresse requise" } else { return "Pret" } }
+        Update-PiedStatut $fauxKms
+        $piedAvant = $piedEssai.Text
+        $decoche = Disable-ActivationSansAdresse $fauxKms
+        $apresGuard = [bool]$chkEssai.IsChecked
+        $tbEssai.Text = "10.0.0.5:1688"
+        $chkEssai.IsChecked = $true
+        $gardeReelle = Disable-ActivationSansAdresse $fauxKms
+        $resteCoche = [bool]$chkEssai.IsChecked
+        $journalKms = (@($script:journalTexte) -join "`n")
+        $xamlDefaut = [regex]::Match($texteXaml, 'x:Name="ChkKms"[^>]*IsChecked="False"').Success
+        Check "champs KMS : sans adresse reelle, l'activation est decochee au demarrage et le pied le dit" ($xamlDefaut -and ($piedAvant -eq "KMS adresse requise") -and $decoche -and (-not $apresGuard) -and (-not $gardeReelle) -and $resteCoche -and ($journalKms -match "Activation KMS decochee")) ("xaml=" + $xamlDefaut + " pied=[" + $piedAvant + "] decoche=" + $decoche + " reste coche=" + $resteCoche)
         # La vraie fenetre, hors ecran : focus sur le champ, collage, relecture. Le texte du
         # constat est ecrit par le script lui-meme, pas par le harnais.
         $preuveCle = Join-Path $Work "preuve_champ_cle.txt"
@@ -2452,6 +2533,8 @@ public class FakeAuthProxy
         $CONFIG_FILE = $Chemin
         Invoke-Expression (Get-FunctionText -Lines $LignesMoteur -Name "Save-Config")
         Invoke-Expression (Get-FunctionText -Lines $LignesMoteur -Name "Protect-SecretText")
+        Invoke-Expression (Get-FunctionText -Lines $LignesInterface -Name "Get-ValeurSaisie")
+        Invoke-Expression (Get-FunctionText -Lines $LignesInterface -Name "Get-ExempleChamp")
         Invoke-Expression (Get-FunctionText -Lines $LignesInterface -Name "Save-ConfigPoste")
         Save-ConfigPoste $Fenetre $Cfg
     } $cfgIso $fenetrePoste $cfgPoste $lignesMoteurDiag $lignesApercuDiag

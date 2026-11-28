@@ -14,6 +14,9 @@
     Le test lit version.txt : il ne doit contenir aucune version en dur, et ce script
     refuse s'il en trouve une.
 
+    Le README porte aussi l'exemple de tag de publication : il suit la version sans son
+    dernier ".0" (v8.5.3 pour 8.5.3.0), comme le workflow de publication l'exige.
+
     Apres un bump, Apercu-Maquette.ps1 change : recompiler l'EXE et regenerer les captures.
     Le script rappelle les deux commandes.
 #>
@@ -97,6 +100,24 @@ if (-not (Test-Path -LiteralPath $cheminReadme)) {
     [void]$etat.Add([pscustomobject]@{ Fichier = $fichierReadme ; Nom = "README (toutes les mentions)" ; Valeur = ($valeurs -join ", ") ; Ligne = $ligne ; Probleme = $probleme })
 }
 
+# README : l'exemple de tag de publication suit la version, sans son dernier ".0"
+# (v8.5.3 pour 8.5.3.0) : c'est la variante que le workflow de publication accepte.
+# Un exemple perime ferait poser un tag que la publication refuserait.
+$motifTag = '`(v[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?)` pour '
+$tagAttendu = "v" + ($source -replace '\.0$', '')
+$tagValeur = "" ; $tagLigne = 0 ; $tagProbleme = ""
+if (Test-Path -LiteralPath $cheminReadme) {
+    $mTag = [regex]::Matches($texte, $motifTag)
+    if ($mTag.Count -eq 0) { $tagProbleme = "exemple de tag introuvable" }
+    elseif ($mTag.Count -gt 1) { $tagProbleme = "plusieurs exemples de tag (" + $mTag.Count + ")" }
+    else {
+        $tagValeur = $mTag[0].Groups[1].Value
+        $tagLigne = Get-LigneDe $texte $mTag[0].Groups[1].Index
+        if ($tagValeur -ne $tagAttendu) { $tagProbleme = "trouve " + $tagValeur }
+    }
+} else { $tagProbleme = "fichier absent" }
+[void]$etat.Add([pscustomobject]@{ Fichier = $fichierReadme ; Nom = "exemple de tag" ; Valeur = $tagValeur ; Ligne = $tagLigne ; Probleme = $tagProbleme })
+
 # Le test ne recopie pas la version : il lit version.txt. Une valeur en dur y serait une
 # seconde source, donc un emplacement qui divergera au prochain bump.
 $cheminTest = Join-Path $Racine $fichierTest
@@ -109,12 +130,13 @@ if (Test-Path -LiteralPath $cheminTest) {
 }
 
 # --- Verdict ---------------------------------------------------------------
-$ecarts = @($etat | Where-Object { $_.Probleme -ne "" -or $_.Valeur -ne $source })
+$ecarts = @($etat | Where-Object { $_.Probleme -ne "" -or $_.Valeur -ne $(if ($_.Nom -eq "exemple de tag") { $tagAttendu } else { $source }) })
 if ($ecarts.Count -gt 0) {
     Write-Host ("Version divergente : version.txt annonce " + $source + ", mais :")
     foreach ($e in $ecarts) {
         $vu = if ($e.Probleme -ne "") { $e.Probleme } else { "trouve " + $e.Valeur }
-        Write-Host ("  " + $e.Fichier + " ligne " + $e.Ligne + " (" + $e.Nom + ") : " + $vu + " - attendu " + $source)
+        $attendu = if ($e.Nom -eq "exemple de tag") { $tagAttendu } else { $source }
+        Write-Host ("  " + $e.Fichier + " ligne " + $e.Ligne + " (" + $e.Nom + ") : " + $vu + " - attendu " + $attendu)
     }
     Write-Host "Rien n'a ete ecrit. Aligner ces emplacements, puis relancer."
     exit 1
@@ -150,6 +172,11 @@ foreach ($c in $copies) {
 
 $texte = [System.IO.File]::ReadAllText($cheminReadme)
 $texte = [regex]::Replace($texte, ('(?<![0-9.])' + [regex]::Escape($source) + '(?![0-9.])'), $nouvelle)
+$mTagEcrit = [regex]::Match($texte, $motifTag)
+if (-not $mTagEcrit.Success) { Write-Host ("ERREUR : exemple de tag perdu dans " + $fichierReadme) ; exit 1 }
+$gTag = $mTagEcrit.Groups[1]
+$tagNouveau = "v" + ($nouvelle -replace '\.0$', '')
+$texte = $texte.Substring(0, $gTag.Index) + $tagNouveau + $texte.Substring($gTag.Index + $gTag.Length)
 Write-Texte -Chemin $cheminReadme -Texte $texte
 
 Write-Host ("Version " + $source + " -> " + $nouvelle + " : version.txt et " + @($etat).Count + " emplacements ecrits.")
